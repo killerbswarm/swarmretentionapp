@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { initializeApp } from "firebase/app";
 import { 
-  getFirestore, 
   collection, 
   onSnapshot, 
   doc, 
@@ -14,25 +12,13 @@ import {
   addDoc
 } from "firebase/firestore";
 import { 
-  getAuth, 
   signInAnonymously, 
   signOut, 
   onAuthStateChanged 
 } from "firebase/auth";
 
-// --- YOUR FIREBASE CONFIGURATION ---
-const firebaseConfig = {
-  apiKey: "AIzaSyAMs-wQc8FG9cu9aHFzXYLy2XC41phCmaA",
-  authDomain: "swarm-12-week-startup.firebaseapp.com",
-  projectId: "swarm-12-week-startup",
-  storageBucket: "swarm-12-week-startup.firebasestorage.app",
-  messagingSenderId: "936210614408",
-  appId: "1:936210614408:web:afc70c25feb9892cdbb73d"
-};
+import { db, auth } from "./firebase";
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const auth = getAuth(app);
 
 /**
  * Strips HTML tags and unescapes common entities from GHL Rich-Text Notes
