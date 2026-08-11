@@ -31,6 +31,8 @@ import AddMemberModal from "./components/AddMemberModal";
 import MemberDetailModal from "./components/MemberDetailModal";
 import { storage } from "./firebase";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import AtRiskDetailModal from "./components/AtRiskDetailModal";
+import AddAtRiskModal from "./components/AddAtRiskModal";
 
 export default function App() {
   // Authentication State
@@ -44,6 +46,10 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
   const [showAddModal, setShowAddModal] = useState(false);
+  const [atRiskMembers, setAtRiskMembers] = useState([]);
+  const [mainTab, setMainTab] = useState("twelve_week"); // "twelve_week" | "at_risk"
+  const [selectedAtRiskMember, setSelectedAtRiskMember] = useState(null);
+  const [showAddAtRiskModal, setShowAddAtRiskModal] = useState(false);
 
   // Person View Modal State
   const [selectedMember, setSelectedMember] = useState(null);
@@ -211,6 +217,22 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
       setLoadingGhl(false);
     }
   };
+
+  // Real-time At Risk members
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const unsubscribe = onSnapshot(
+      collection(db, "atRiskMembers"),
+      (snapshot) => {
+        const data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        setAtRiskMembers(data);
+      },
+      (error) => console.error("At Risk sync error:", error)
+    );
+
+  return () => unsubscribe();
+}, [isAuthenticated]);
 
   const [smsFile, setSmsFile] = useState(null);          // the selected File object
   const [smsFilePreview, setSmsFilePreview] = useState(null); // local preview URL
@@ -502,6 +524,16 @@ if (smsFile) {
     setIsEditing(false);
   };
 
+  const handleRemoveFromAtRisk = async (id) => {
+  if (!window.confirm("Remove this member from At Risk?")) return;
+  try {
+    await deleteDoc(doc(db, "atRiskMembers", id));
+    setSelectedAtRiskMember(null);
+  } catch (err) {
+    console.error(err);
+    alert("Failed to remove member");
+  }
+};
   // Delete Member
   const handleDeleteMember = async (memberId) => {
     if (window.confirm("Are you sure you want to permanently delete this member?")) {
@@ -604,6 +636,25 @@ if (smsFile) {
     );
   }
 
+  const handleAddAtRiskMember = async (data) => {
+  try {
+    const docId = data.email
+      ? data.email.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()
+      : `phone_${(data.phone || "").replace(/\D/g, "")}`;
+
+    await setDoc(doc(db, "atRiskMembers", docId), {
+      id: docId,
+      ...data,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    setShowAddAtRiskModal(false);
+  } catch (err) {
+    console.error(err);
+    alert("Failed to add At Risk member");
+  }
+};
   // --- PASSWORD LOCK SCREEN UNLESS AUTHENTICATED ---
  if (!isAuthenticated) {
   return (
@@ -645,17 +696,19 @@ if (smsFile) {
     : 0;
 
   // Filtered Members for Table
-  const filteredMembers = members.filter(m => {
-    if (filter === "pending") return m.status === "pending";
-    if (filter === "active") return m.status === "active";
-    if (filter === "high_risk") {
-      const currentWeekVisits = m.weeklyCheckIns?.[m.currentWeek] || 0;
-      const risk = getMemberRiskInfo(currentWeekVisits, m.startDate, m.status);
-      return m.status === "active" && risk.level === "high";
-    }
-    return m.status !== "cancelled";
-  });
-
+  const filteredMembers = filter === "at_risk"
+  ? atRiskMembers
+  : members.filter((m) => {
+      if (filter === "pending") return m.status === "pending";
+      if (filter === "active") return m.status === "active";
+      if (filter === "high_risk") {
+        const currentWeekVisits = m.weeklyCheckIns?.[m.currentWeek] || 0;
+        const risk = getMemberRiskInfo(currentWeekVisits, m.startDate, m.status);
+        return risk.level === "high";
+      }
+      // "all" – exclude cancelled
+      return m.status !== "cancelled";
+    });
   // --- PERSON VIEW DETAILED STATS, NEXT WEEK CALCULATIONS & CALENDAR ---
   let personStats = null;
   let checkInDatesSet = new Set();
@@ -747,23 +800,62 @@ if (smsFile) {
 
   return (
     <div style={styles.container}>
-      {/* Header */}
-      <header style={styles.header}>
-        <div>
-          <h1 style={styles.title}>Swarm Member Retention Dashboard</h1>
-          <p style={styles.subtitle}>Click any member row to view full stats, adjust check-ins & edit dates</p>
-        </div>
-        <div style={{ display: "flex", gap: "10px" }}>
-          <button style={styles.addBtn} onClick={() => setShowAddModal(true)}>
-            + Add Member
-          </button>
-          <button style={styles.logoutBtn} onClick={handleLogout}>
-            🔒 Logout
-          </button>
-        </div>
-      </header>
+      {/* ===== MAIN TABS ===== */}
+{/* Header */}
+<div style={styles.header}>
+  <div>
+    <h1 style={styles.title}>Swarm Member Retention Dashboard</h1>
+    <p style={styles.subtitle}>
+      Click any member row to view full stats, adjust check-ins & edit dates
+    </p>
+  </div>
 
-      {/* Metrics Overview */}
+  <div style={{ display: "flex", gap: "10px" }}>
+    {mainTab === "twelve_week" && (
+      <button style={styles.addBtn} onClick={() => setShowAddModal(true)}>
+        + Add Member
+      </button>
+    )}
+
+    {mainTab === "at_risk" && (
+      <button style={styles.addBtn} onClick={() => setShowAddAtRiskModal(true)}>
+        + Add At Risk
+      </button>
+    )}
+
+    <button style={styles.logoutBtn} onClick={handleLogout}>
+      Logout
+    </button>
+  </div>
+</div>
+
+{/* Main Tabs */}
+<div style={{ display: "flex", gap: "8px", marginBottom: "24px" }}>
+  <button
+    onClick={() => {
+      setMainTab("twelve_week");
+      setFilter("all");
+    }}
+    style={mainTab === "twelve_week" ? styles.activeFilterBtn : styles.filterBtn}
+  >
+    12-Week Onboarding
+  </button>
+
+  <button
+    onClick={() => setMainTab("at_risk")}
+    style={mainTab === "at_risk" ? styles.activeFilterBtn : styles.filterBtn}
+  >
+    ⚠️ At Risk ({atRiskMembers.length})
+  </button>
+</div>
+
+
+{/* ===== 12-WEEK VIEW ===== */}
+{mainTab === "twelve_week" && (
+  <>
+    {/* STATS CARDS */}
+    <div style={styles.statsRow}>
+     {/* Metrics Overview */}
       <div style={styles.metricsGrid}>
         <div style={styles.metricCard}>
           <span style={styles.metricLabel}>Active Onboarding</span>
@@ -791,36 +883,8 @@ if (smsFile) {
           <span style={styles.metricSubText}>{totalScansCompleted} / {possibleScans} scans done</span>
         </div>
       </div>
-
-      {/* Filters */}
-      <div style={styles.filterBar}>
-        <button 
-          style={filter === "all" ? styles.activeFilterBtn : styles.filterBtn} 
-          onClick={() => setFilter("all")}
-        >
-          All Members ({members.filter(m => m.status !== "cancelled").length})
-        </button>
-        <button 
-          style={filter === "pending" ? styles.activeFilterBtn : styles.filterBtn} 
-          onClick={() => setFilter("pending")}
-        >
-          ⏳ Pending ({pendingMembers.length})
-        </button>
-        <button 
-          style={filter === "active" ? styles.activeFilterBtn : styles.filterBtn} 
-          onClick={() => setFilter("active")}
-        >
-          🔥 Active ({activeMembers.length})
-        </button>
-        <button 
-          style={filter === "high_risk" ? styles.activeFilterBtn : styles.filterBtn} 
-          onClick={() => setFilter("high_risk")}
-        >
-          ⚠️ At Risk ({highRiskMembers.length})
-        </button>
-      </div>
-
-      {/* Main Table */}
+    </div>
+     {/* Main Table */}
       <div style={styles.tableContainer}>
         <table style={styles.table}>
           <thead>
@@ -835,6 +899,7 @@ if (smsFile) {
           </thead>
           <tbody>
             {filteredMembers.map((member) => {
+              const isAtRisk = filter === "at_risk" || !!member.atRiskSince;
               const isPending = member.status === "pending";
               const thisWeekVisits = isPending ? 0 : (member.weeklyCheckIns?.[member.currentWeek] || 0);
               const risk = getMemberRiskInfo(thisWeekVisits, member.startDate, member.status);
@@ -845,20 +910,37 @@ if (smsFile) {
                 <tr 
                   key={member.id} 
                   style={styles.clickableTableRow}
-                  onClick={() => handleOpenPersonView(member)}
-                >
+                 onClick={() => {
+        if (isAtRisk) {
+          setSelectedAtRiskMember(member);
+        } else {
+          handleOpenPersonView(member);
+        }
+      }}
+    >
                   <td style={styles.td}>
                     <div style={styles.memberName}>{member.firstName} {member.lastName}</div>
                     <div style={styles.memberSub}>{member.email || member.phone || "No contact info"}</div>
                   </td>
 
-                  <td style={styles.td}>
-                    {isPending ? (
-                      <span style={styles.badgePending}>⏳ Pending</span>
-                    ) : (
-                      <span style={styles.badgeWeek}>Week {member.currentWeek}</span>
-                    )}
-                  </td>
+                 <td style={styles.td}>
+        {isAtRisk ? (
+          <span style={{
+            backgroundColor: "#fef2f2",
+            color: "#dc2626",
+            padding: "3px 8px",
+            borderRadius: "6px",
+            fontSize: "12px",
+            fontWeight: "700"
+          }}>
+            ⚠️ {member.daysOut || "?"} days out
+          </span>
+        ) : isPending ? (
+          <span style={styles.badgePending}>⏳ Pending</span>
+        ) : (
+          <span style={styles.badgeWeek}>Week {member.currentWeek}</span>
+        )}
+      </td>
 
                   <td style={styles.td}>
                     <span style={scanCount === 3 ? styles.scanCompleteBadge : styles.scanPartialBadge}>
@@ -919,6 +1001,166 @@ if (smsFile) {
           </tbody>
         </table>
       </div>
+    {/* FILTERS */}
+    <div style={styles.filterBar}>
+      <button
+        style={filter === "all" ? styles.activeFilterBtn : styles.filterBtn}
+        onClick={() => setFilter("all")}
+      >
+        All Members ({members.filter(m => m.status !== "cancelled").length})
+      </button>
+      <button
+        style={filter === "pending" ? styles.activeFilterBtn : styles.filterBtn}
+        onClick={() => setFilter("pending")}
+      >
+        ⏳ Pending ({pendingMembers.length})
+      </button>
+      <button
+        style={filter === "active" ? styles.activeFilterBtn : styles.filterBtn}
+        onClick={() => setFilter("active")}
+      >
+        🔥 Active ({activeMembers.length})
+      </button>
+      <button
+        style={filter === "high_risk" ? styles.activeFilterBtn : styles.filterBtn}
+        onClick={() => setFilter("high_risk")}
+      >
+        ⚠️ High Risk ({highRiskMembers.length})
+      </button>
+    </div>
+
+    {/* 12-WEEK MEMBERS TABLE */}
+    <div style={styles.tableContainer}>
+      <table style={styles.table}>
+        <thead>
+          <tr style={styles.tableHeader}>
+            <th style={styles.th}>Member Name</th>
+            <th style={styles.th}>Week</th>
+            <th style={styles.th}>InBody Scans</th>
+            <th style={styles.th}>This Wk Visits</th>
+            <th style={styles.th}>12-Week Attendance Matrix</th>
+            <th style={{ ...styles.th, textAlign: "right" }}>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {/* Keep your existing filteredMembers.map(...) row code here */}
+        </tbody>
+      </table>
+    </div>
+  </>
+)}
+
+{/* ===== AT RISK VIEW ===== */}
+{mainTab === "at_risk" && (
+  <div>
+    {mainTab === "at_risk" && (
+  <div style={styles.metricsGrid}>
+    <div style={styles.metricCard}>
+      <span style={styles.metricLabel}>Total At Risk</span>
+      <span style={styles.metricValue}>{atRiskMembers.length}</span>
+      <span style={styles.metricSubText}>Currently out 7+ days</span>
+    </div>
+
+ <div style={styles.metricCard}>
+      <span style={styles.metricLabel}>Avg Days Out</span>
+      <span style={styles.metricValue}>
+        {atRiskMembers.length
+          ? Math.round(
+              atRiskMembers
+                .map((m) => Number(m.daysOut) || 0)
+                .filter((d) => d > 0 && d < 500)
+                .reduce((sum, d) => sum + d, 0) /
+              atRiskMembers.filter((m) => (Number(m.daysOut) || 0) > 0 && (Number(m.daysOut) || 0) < 500).length
+            )
+          : 0}
+      </span>
+      <span style={styles.metricSubText}>Average time away</span>
+    </div>
+
+    <div style={styles.metricCard}>
+      <span style={styles.metricLabel}>Longest Out</span>
+      <span style={styles.metricValue}>
+        {atRiskMembers.length
+          ? Math.max(...atRiskMembers.map((m) => m.daysOut || 0))
+          : 0}
+      </span>
+      <span style={styles.metricSubText}>Days since last visit</span>
+    </div>
+  </div>
+)}
+    <h3 style={{ marginTop: 0, marginBottom: "4px" }}>At Risk Members</h3>
+    <p style={{ color: "#64748b", marginBottom: "20px", fontSize: "14px" }}>
+      Members who have not visited in 7+ days
+    </p>
+
+    <div style={styles.tableContainer}>
+      <table style={styles.table}>
+        <thead>
+          <tr style={styles.tableHeader}>
+            <th style={styles.th}>Member</th>
+            <th style={styles.th}>Days Out</th>
+            <th style={styles.th}>Last Check-In</th>
+            <th style={styles.th}>At Risk Since</th>
+            <th style={{ ...styles.th, textAlign: "right" }}>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {atRiskMembers.length === 0 ? (
+            <tr>
+              <td colSpan={5} style={{ padding: "32px", textAlign: "center", color: "#94a3b8" }}>
+                No members currently at risk
+              </td>
+            </tr>
+          ) : (
+            atRiskMembers.map((member) => (
+              <tr
+                key={member.id}
+                style={styles.clickableTableRow}
+                onClick={() => setSelectedAtRiskMember(member)}
+              >
+                <td style={styles.td}>
+                  <div style={styles.memberName}>
+                    {member.firstName} {member.lastName}
+                  </div>
+                  <div style={styles.memberSub}>
+                    {member.email || member.phone || "No contact"}
+                  </div>
+                </td>
+                <td style={styles.td}>
+                  <span style={{
+                    backgroundColor: "#fef2f2",
+                    color: "#dc2626",
+                    padding: "3px 8px",
+                    borderRadius: "6px",
+                    fontSize: "12px",
+                    fontWeight: "700"
+                  }}>
+                    {member.daysOut || "?"} days
+                  </span>
+                </td>
+                <td style={styles.td}>
+                  {member.lastCheckIn
+                    ? new Date(member.lastCheckIn).toLocaleDateString()
+                    : "—"}
+                </td>
+                <td style={styles.td}>
+                  {member.atRiskSince
+                    ? new Date(member.atRiskSince).toLocaleDateString()
+                    : "—"}
+                </td>
+                <td style={{ ...styles.td, textAlign: "right", color: "#64748b" }}>
+                  View →
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  </div>
+)}
+
+ 
 
       {/* --- PERSON VIEW MODAL --- */}
    {selectedMember && (
@@ -957,7 +1199,27 @@ if (smsFile) {
   setSmsFilePreview={setSmsFilePreview}
   />
 )}
+  {selectedAtRiskMember && (
+  <AtRiskDetailModal
+    member={selectedAtRiskMember}
+    onClose={() => setSelectedAtRiskMember(null)}
+    onRemoveFromAtRisk={handleRemoveFromAtRisk}
+  />
+)}
+{showAddAtRiskModal && (
+  <AddAtRiskModal
+    onClose={() => setShowAddAtRiskModal(false)}
+    onSave={handleAddAtRiskMember}
+  />
+)}
 
+{selectedAtRiskMember && (
+  <AtRiskDetailModal
+    member={selectedAtRiskMember}
+    onClose={() => setSelectedAtRiskMember(null)}
+    onRemoveFromAtRisk={handleRemoveFromAtRisk}
+  />
+)}
       {/* --- ADD MEMBER MODAL --- */}
      {showAddModal && (
   <AddMemberModal

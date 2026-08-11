@@ -222,7 +222,15 @@ exports.getGhlContactDetails = onRequest(
       }
 
       let resolvedContactId = contactId;
+      let contactDetails = {
+        firstName: "",
+        lastName: "",
+        email: email || "",
+        phone: "",
+        lastCheckIn: null,
+      };
 
+      // Search by email if we don't have a contactId
       if (!resolvedContactId && email) {
         const searchRes = await fetch(
           `https://services.leadconnectorhq.com/contacts/?locationId=${locationId}&query=${encodeURIComponent(email)}`,
@@ -237,16 +245,62 @@ exports.getGhlContactDetails = onRequest(
         
         if (!searchRes.ok) {
           console.error("GHL Contact Search Error:", searchData);
-          return res.status(200).json({ notes: [], appointments: [], messages: [] });
+          return res.status(200).json({ 
+            notes: [], appointments: [], messages: [],
+            ...contactDetails 
+          });
         }
 
-        resolvedContactId = searchData.contacts?.[0]?.id;
+        const found = searchData.contacts?.[0];
+        if (found) {
+          resolvedContactId = found.id;
+          // Often the search result already has basic fields
+          contactDetails.firstName = found.firstName || found.first_name || "";
+          contactDetails.lastName = found.lastName || found.last_name || "";
+          contactDetails.email = found.email || email;
+          contactDetails.phone = found.phone || found.phoneNumber || "";
+        }
       }
 
       if (!resolvedContactId) {
-        return res.status(200).json({ notes: [], appointments: [], messages: [] });
+        return res.status(200).json({ 
+          notes: [], appointments: [], messages: [],
+          ...contactDetails 
+        });
       }
 
+      // Fetch full contact record (for name, phone, custom fields)
+      try {
+        const contactRes = await fetch(
+          `https://services.leadconnectorhq.com/contacts/${resolvedContactId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${GHL_API_TOKEN.value()}`,
+              Version: GHL_API_VERSION,
+            },
+          }
+        );
+        const contactData = await contactRes.json();
+        const c = contactData.contact || contactData;
+
+        contactDetails = {
+          firstName: c.firstName || c.first_name || contactDetails.firstName || "",
+          lastName: c.lastName || c.last_name || contactDetails.lastName || "",
+          email: c.email || contactDetails.email || "",
+          phone: c.phone || c.phoneNumber || contactDetails.phone || "",
+          lastCheckIn:
+            c.last_checkin_date ||
+            c.customFields?.last_checkin_date ||
+            (Array.isArray(c.customFields)
+              ? c.customFields.find(f => f.key === "last_checkin_date" || f.id === "last_checkin_date")?.value
+              : null) ||
+            null,
+        };
+      } catch (err) {
+        console.error("Failed to fetch full contact:", err);
+      }
+
+      // Fetch notes, appointments, messages in parallel
       const [notesRes, eventsRes, apptsRes, convosRes] = await Promise.all([
         fetch(`https://services.leadconnectorhq.com/contacts/${resolvedContactId}/notes`, {
           headers: { Authorization: `Bearer ${GHL_API_TOKEN.value()}`, Version: GHL_API_VERSION },
@@ -289,6 +343,11 @@ exports.getGhlContactDetails = onRequest(
 
       return res.status(200).json({
         contactId: resolvedContactId,
+        firstName: contactDetails.firstName,
+        lastName: contactDetails.lastName,
+        email: contactDetails.email,
+        phone: contactDetails.phone,
+        lastCheckIn: contactDetails.lastCheckIn,
         notes: notesData.notes || [],
         appointments: uniqueAppointments,
         messages: messages.slice(0, 15),
@@ -397,3 +456,108 @@ exports.sendGhlSms = onRequest({ cors: true,secrets: [GHL_API_TOKEN, GHL_USER_ID
     return res.status(500).json({ error: "Internal Server Error", details: err.message });
   }
 });
+
+// =========================================================================
+// ENDPOINT: GHL At-Risk Webhook (member has been out 7+ days)
+// =========================================================================
+exports.ghlAtRiskWebhook = onRequest(
+  { cors: true, secrets: [GHL_API_TOKEN, GHL_LOCATION_ID] },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
+
+      const payload = req.body;
+      const email = payload.email || payload.contact?.email || "";
+      const phone = payload.phone || payload.contact?.phone || "";
+      const firstName = payload.first_name || payload.contact?.first_name || "Unknown";
+      const lastName = payload.last_name || payload.contact?.last_name || "";
+      const ghlContactId = payload.contact_id || payload.contact?.id || payload.id || null;
+      const lastCheckIn = payload.last_check_in || payload.lastCheckIn || null;
+
+      if (!email && !ghlContactId && !phone) {
+        return res.status(400).json({ error: "Need at least email, phone, or contact_id" });
+      }
+
+      // Create a stable document ID
+      const docId = email
+        ? email.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()
+        : ghlContactId || `phone_${phone.replace(/\D/g, "")}`;
+
+      const now = new Date();
+      const lastCheckInDate = lastCheckIn ? new Date(lastCheckIn) : null;
+      const daysOut = lastCheckInDate
+        ? Math.floor((now - lastCheckInDate) / (1000 * 60 * 60 * 24))
+        : 7; // fallback
+
+      const atRiskData = {
+        id: docId,
+        firstName,
+        lastName,
+        email: email || "",
+        phone: phone || "",
+        ghlContactId: ghlContactId || null,
+        lastCheckIn: lastCheckInDate ? lastCheckInDate.toISOString() : null,
+        atRiskSince: now.toISOString(),
+        daysOut,
+        updatedAt: now.toISOString(),
+        createdAt: now.toISOString(),
+      };
+
+      await db.collection("atRiskMembers").doc(docId).set(atRiskData, { merge: true });
+
+      return res.status(200).json({
+        success: true,
+        message: `${firstName} ${lastName} added to At Risk`,
+        data: atRiskData,
+      });
+    } catch (err) {
+      console.error("At Risk Webhook Error:", err);
+      return res.status(500).json({ error: "Internal Server Error", details: err.message });
+    }
+  }
+);
+
+// =========================================================================
+// ENDPOINT: GHL At-Risk Check-In Webhook (member returned → remove from At Risk)
+// =========================================================================
+exports.ghlAtRiskCheckInWebhook = onRequest(
+  { cors: true },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
+
+      const payload = req.body;
+      const email = payload.email || payload.contact?.email || "";
+      const ghlContactId = payload.contact_id || payload.contact?.id || payload.id || null;
+      const phone = payload.phone || payload.contact?.phone || "";
+
+      if (!email && !ghlContactId && !phone) {
+        return res.status(400).json({ error: "Need at least email, phone, or contact_id" });
+      }
+
+      const docId = email
+        ? email.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()
+        : ghlContactId || `phone_${phone.replace(/\D/g, "")}`;
+
+      const docRef = db.collection("atRiskMembers").doc(docId);
+      const doc = await docRef.get();
+
+      if (!doc.exists) {
+        return res.status(200).json({
+          success: true,
+          message: "Person was not in At Risk list",
+        });
+      }
+
+      await docRef.delete();
+
+      return res.status(200).json({
+        success: true,
+        message: `${doc.data().firstName || "Member"} removed from At Risk`,
+      });
+    } catch (err) {
+      console.error("At Risk Check-In Webhook Error:", err);
+      return res.status(500).json({ error: "Internal Server Error", details: err.message });
+    }
+  }
+);
