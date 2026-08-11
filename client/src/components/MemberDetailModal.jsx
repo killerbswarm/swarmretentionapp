@@ -40,6 +40,10 @@ export default function MemberDetailModal(props) {
     onSaveEdit,
     onDeleteMember,
     onToggleScan,
+    smsFile,
+    setSmsFile,
+    smsFilePreview,
+    setSmsFilePreview,
   } = props;
 
   if (!selectedMember || !personStats) return null;
@@ -106,6 +110,10 @@ export default function MemberDetailModal(props) {
   onDeleteLog={onDeleteLog}
   onAddNote={onAddNote}
   onSendSms={onSendSms}
+  smsFile={smsFile}
+  setSmsFile={setSmsFile}
+  smsFilePreview={smsFilePreview}
+  setSmsFilePreview={setSmsFilePreview}
 />
 
             {/* Edit Settings */}
@@ -136,7 +144,15 @@ export default function MemberDetailModal(props) {
 const styles = {
   // Person View Modal Styles
   modalOverlay: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(15, 23, 42, 0.6)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000 },
-  personViewModal: { backgroundColor: "#fff", borderRadius: "12px", width: "720px", maxWidth: "95%", maxHeight: "90vh", overflowY: "auto", padding: "24px", display: "flex", flexDirection: "column", gap: "16px" },
+  personViewModal: {
+  backgroundColor: "#fff",
+  borderRadius: "16px",
+  width: "100%",
+  maxWidth: "960px",        // a bit wider too
+  maxHeight: "94vh",        // almost full screen height
+  overflowY: "auto",
+  boxShadow: "0 25px 50px -12px rgb(0 0 0 / 0.4)",
+},
   personHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", paddingBottom: "12px", borderBottom: "1px solid #e2e8f0" },
   closeBtn: { background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "#64748b" },
   progressCard: { backgroundColor: "#f8fafc", padding: "12px 16px", borderRadius: "8px", border: "1px solid #e2e8f0" },

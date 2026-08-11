@@ -1,14 +1,15 @@
 const { onRequest } = require("firebase-functions/v2/https");
+const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 
 admin.initializeApp();
 const db = admin.firestore();
 
-// --- GHL API V2 CONFIGURATION ---
-const GHL_API_TOKEN = "pit-308dd3ba-4389-4cc2-9cae-923785c5d231";
+// Secrets (loaded securely)
+const GHL_API_TOKEN = defineSecret("GHL_API_TOKEN");
+const GHL_LOCATION_ID = defineSecret("GHL_LOCATION_ID");
+const GHL_USER_ID = defineSecret("GHL_USER_ID");
 const GHL_API_VERSION = "2021-07-28";
-const GHL_LOCATION_ID = "tNtRSRKPPnHXZjLAo4zs";
-const GHL_USER_ID = "xMvRtd4w6phpplFJw6is"; // Swarm App Staff User ID
 
 function calculateCurrentWeek(startDateTimestamp, weekOverride) {
   if (weekOverride !== null && weekOverride !== undefined) {
@@ -206,98 +207,104 @@ exports.ghlCheckInWebhook = onRequest({ cors: true }, async (req, res) => {
 // =========================================================================
 // ENDPOINT 3: Fetch GHL Notes, Appointments & Messages for Dashboard
 // =========================================================================
-exports.getGhlContactDetails = onRequest({ cors: true }, async (req, res) => {
-  try {
-    const { contactId, email, locationId: queryLocId } = req.query;
-    const locationId = queryLocId || GHL_LOCATION_ID;
+exports.getGhlContactDetails = onRequest(
+  { 
+    cors: true, 
+    secrets: [GHL_API_TOKEN, GHL_LOCATION_ID] 
+  }, 
+  async (req, res) => {
+    try {
+      const { contactId, email, locationId: queryLocId } = req.query;
+      const locationId = queryLocId || GHL_LOCATION_ID.value();
 
-    if (!contactId && !email) {
-      return res.status(400).json({ error: "Missing contactId or email" });
-    }
+      if (!contactId && !email) {
+        return res.status(400).json({ error: "Missing contactId or email" });
+      }
 
-    let resolvedContactId = contactId;
+      let resolvedContactId = contactId;
 
-    if (!resolvedContactId && email) {
-      const searchRes = await fetch(
-        `https://services.leadconnectorhq.com/contacts/?locationId=${locationId}&query=${encodeURIComponent(email)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${GHL_API_TOKEN}`,
-            Version: GHL_API_VERSION,
-          },
+      if (!resolvedContactId && email) {
+        const searchRes = await fetch(
+          `https://services.leadconnectorhq.com/contacts/?locationId=${locationId}&query=${encodeURIComponent(email)}`,
+          {
+            headers: {
+              Authorization: `Bearer ${GHL_API_TOKEN.value()}`,
+              Version: GHL_API_VERSION,
+            },
+          }
+        );
+        const searchData = await searchRes.json();
+        
+        if (!searchRes.ok) {
+          console.error("GHL Contact Search Error:", searchData);
+          return res.status(200).json({ notes: [], appointments: [], messages: [] });
         }
-      );
-      const searchData = await searchRes.json();
-      
-      if (!searchRes.ok) {
-        console.error("GHL Contact Search Error:", searchData);
+
+        resolvedContactId = searchData.contacts?.[0]?.id;
+      }
+
+      if (!resolvedContactId) {
         return res.status(200).json({ notes: [], appointments: [], messages: [] });
       }
 
-      resolvedContactId = searchData.contacts?.[0]?.id;
-    }
+      const [notesRes, eventsRes, apptsRes, convosRes] = await Promise.all([
+        fetch(`https://services.leadconnectorhq.com/contacts/${resolvedContactId}/notes`, {
+          headers: { Authorization: `Bearer ${GHL_API_TOKEN.value()}`, Version: GHL_API_VERSION },
+        }),
+        fetch(`https://services.leadconnectorhq.com/calendars/events?locationId=${locationId}&contactId=${resolvedContactId}`, {
+          headers: { Authorization: `Bearer ${GHL_API_TOKEN.value()}`, Version: GHL_API_VERSION },
+        }),
+        fetch(`https://services.leadconnectorhq.com/contacts/${resolvedContactId}/appointments`, {
+          headers: { Authorization: `Bearer ${GHL_API_TOKEN.value()}`, Version: GHL_API_VERSION },
+        }),
+        fetch(`https://services.leadconnectorhq.com/conversations/search?locationId=${locationId}&contactId=${resolvedContactId}`, {
+          headers: { Authorization: `Bearer ${GHL_API_TOKEN.value()}`, Version: GHL_API_VERSION },
+        }),
+      ]);
 
-    if (!resolvedContactId) {
-      return res.status(200).json({ notes: [], appointments: [], messages: [] });
-    }
+      const notesData = await notesRes.json();
+      const eventsData = await eventsRes.json();
+      const apptsData = await apptsRes.json();
+      const convosData = await convosRes.json();
 
-    const [notesRes, eventsRes, apptsRes, convosRes] = await Promise.all([
-      fetch(`https://services.leadconnectorhq.com/contacts/${resolvedContactId}/notes`, {
-        headers: { Authorization: `Bearer ${GHL_API_TOKEN}`, Version: GHL_API_VERSION },
-      }),
-      fetch(`https://services.leadconnectorhq.com/calendars/events?locationId=${locationId}&contactId=${resolvedContactId}`, {
-        headers: { Authorization: `Bearer ${GHL_API_TOKEN}`, Version: GHL_API_VERSION },
-      }),
-      fetch(`https://services.leadconnectorhq.com/contacts/${resolvedContactId}/appointments`, {
-        headers: { Authorization: `Bearer ${GHL_API_TOKEN}`, Version: GHL_API_VERSION },
-      }),
-      fetch(`https://services.leadconnectorhq.com/conversations/search?locationId=${locationId}&contactId=${resolvedContactId}`, {
-        headers: { Authorization: `Bearer ${GHL_API_TOKEN}`, Version: GHL_API_VERSION },
-      }),
-    ]);
+      const combinedAppointments = [
+        ...(eventsData.events || []),
+        ...(apptsData.appointments || []),
+        ...(apptsData.events || [])
+      ];
 
-    const notesData = await notesRes.json();
-    const eventsData = await eventsRes.json();
-    const apptsData = await apptsRes.json();
-    const convosData = await convosRes.json();
+      const uniqueAppointments = Array.from(
+        new Map(combinedAppointments.map((item) => [item.id, item])).values()
+      );
 
-    const combinedAppointments = [
-      ...(eventsData.events || []),
-      ...(apptsData.appointments || []),
-      ...(apptsData.events || [])
-    ];
+      let messages = [];
+      const conversationId = convosData.conversations?.[0]?.id;
+      if (conversationId) {
+        const msgRes = await fetch(`https://services.leadconnectorhq.com/conversations/${conversationId}/messages`, {
+          headers: { Authorization: `Bearer ${GHL_API_TOKEN.value()}`, Version: GHL_API_VERSION },
+        });
+        const msgData = await msgRes.json();
+        messages = msgData.messages?.messages || [];
+      }
 
-    const uniqueAppointments = Array.from(
-      new Map(combinedAppointments.map((item) => [item.id, item])).values()
-    );
-
-    let messages = [];
-    const conversationId = convosData.conversations?.[0]?.id;
-    if (conversationId) {
-      const msgRes = await fetch(`https://services.leadconnectorhq.com/conversations/${conversationId}/messages`, {
-        headers: { Authorization: `Bearer ${GHL_API_TOKEN}`, Version: GHL_API_VERSION },
+      return res.status(200).json({
+        contactId: resolvedContactId,
+        notes: notesData.notes || [],
+        appointments: uniqueAppointments,
+        messages: messages.slice(0, 15),
       });
-      const msgData = await msgRes.json();
-      messages = msgData.messages?.messages || [];
+
+    } catch (err) {
+      console.error("GHL Sync Error:", err);
+      return res.status(500).json({ error: "Failed to fetch GHL details", details: err.message });
     }
-
-    return res.status(200).json({
-      contactId: resolvedContactId,
-      notes: notesData.notes || [],
-      appointments: uniqueAppointments,
-      messages: messages.slice(0, 15),
-    });
-
-  } catch (err) {
-    console.error("GHL Sync Error:", err);
-    return res.status(500).json({ error: "Failed to fetch GHL details", details: err.message });
   }
-});
+);
 
 // =========================================================================
 // ENDPOINT 4: Create a New Staff Note in GHL
 // =========================================================================
-exports.createGhlNote = onRequest({ cors: true }, async (req, res) => {
+exports.createGhlNote = onRequest({ cors: true,secrets: [GHL_API_TOKEN, GHL_USER_ID] }, async (req, res) => {
   try {
     if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
 
@@ -310,13 +317,13 @@ exports.createGhlNote = onRequest({ cors: true }, async (req, res) => {
     const response = await fetch(`https://services.leadconnectorhq.com/contacts/${contactId}/notes`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${GHL_API_TOKEN}`,
+        Authorization: `Bearer ${GHL_API_TOKEN.value()}`,
         Version: GHL_API_VERSION,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({ 
         body: note,
-        userId: GHL_USER_ID 
+        userId: GHL_USER_ID.value() 
       })
     });
 
@@ -338,29 +345,42 @@ exports.createGhlNote = onRequest({ cors: true }, async (req, res) => {
 // =========================================================================
 // ENDPOINT 5: Send an SMS Text via GHL (Attributed to Swarm App User)
 // =========================================================================
-exports.sendGhlSms = onRequest({ cors: true }, async (req, res) => {
+exports.sendGhlSms = onRequest({ cors: true,secrets: [GHL_API_TOKEN, GHL_USER_ID] }, async (req, res) => {
   try {
     if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
 
-    const { contactId, message } = req.body;
+    const { contactId, message, attachments } = req.body;
 
-    if (!contactId || !message) {
-      return res.status(400).json({ error: "Missing contactId or message text" });
+    if (!contactId) {
+      return res.status(400).json({ error: "Missing contactId" });
+    }
+
+    if (!message && (!attachments || attachments.length === 0)) {
+      return res.status(400).json({ error: "Need either message text or an attachment" });
+    }
+
+    const payload = {
+      type: "SMS",
+      contactId: contactId,
+      userId: GHL_USER_ID.value()
+    };
+
+    if (message && message.trim()) {
+      payload.message = message.trim();
+    }
+
+    if (attachments && attachments.length > 0) {
+      payload.attachments = attachments;   // array of public image URLs
     }
 
     const response = await fetch(`https://services.leadconnectorhq.com/conversations/messages`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${GHL_API_TOKEN}`,
+        Authorization: `Bearer ${GHL_API_TOKEN.value()}`,
         Version: GHL_API_VERSION,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        type: "SMS",
-        contactId: contactId,
-        message: message,
-        userId: GHL_USER_ID
-      })
+      body: JSON.stringify(payload)
     });
 
     const data = await response.json();

@@ -10,7 +10,7 @@ export default function Login({
     <div style={styles.lockScreenContainer}>
       <div style={styles.lockCard}>
         <div style={styles.lockIcon}>🔐</div>
-        <h2 style={styles.lockTitle}>Swarm Onboarding Access</h2>
+        <h2 style={styles.lockTitle}>Swarm Member Retention App</h2>
         <p style={styles.lockSubtitle}>Enter the staff password to open the dashboard</p>
         
         <form onSubmit={onSubmit} style={styles.lockForm}>

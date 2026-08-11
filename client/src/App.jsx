@@ -29,6 +29,8 @@ import {
 import Login from "./components/Login";
 import AddMemberModal from "./components/AddMemberModal";
 import MemberDetailModal from "./components/MemberDetailModal";
+import { storage } from "./firebase";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 export default function App() {
   // Authentication State
@@ -76,6 +78,56 @@ export default function App() {
     scan3: false
   });
 
+async function compressImage(file, maxWidth = 800, quality = 0.6) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+
+      const canvas = document.createElement("canvas");
+      let width = img.width;
+      let height = img.height;
+
+      // Scale down
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width = maxWidth;
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            reject(new Error("Compression failed"));
+            return;
+          }
+          const compressedFile = new File(
+            [blob],
+            file.name.replace(/\.[^.]+$/, ".jpg"),
+            { type: "image/jpeg", lastModified: Date.now() }
+          );
+          resolve(compressedFile);
+        },
+        "image/jpeg",
+        quality
+      );
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Failed to load image"));
+    };
+
+    img.src = url;
+  });
+}
   // Monitor Auth State
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
@@ -160,6 +212,8 @@ export default function App() {
     }
   };
 
+  const [smsFile, setSmsFile] = useState(null);          // the selected File object
+  const [smsFilePreview, setSmsFilePreview] = useState(null); // local preview URL
   // Open Person View, fetch Firestore logs and live GHL data
   const handleOpenPersonView = async (member) => {
     setSelectedMember(member);
@@ -201,6 +255,34 @@ export default function App() {
 
     setAddingNote(true);
     try {
+      // ========== PUT THE NEW CODE HERE ==========
+  let attachments = [];
+
+if (smsFile) {
+  let compressed = await compressImage(smsFile, 600, 0.45);
+
+  // Keep compressing harder if still too big
+  let attempts = 0;
+  while (compressed.size > 2.8 * 1024 * 1024 && attempts < 3) {
+    attempts++;
+    console.log(`Still too big (${(compressed.size / 1024 / 1024).toFixed(2)} MB), compressing more... attempt ${attempts}`);
+    compressed = await compressImage(compressed, 500 - (attempts * 50), 0.35);
+  }
+
+  console.log("Final size:", (compressed.size / 1024 / 1024).toFixed(2), "MB");
+
+  if (compressed.size > 3 * 1024 * 1024) {
+    alert(`Image is still too large (${(compressed.size / 1024 / 1024).toFixed(1)} MB) even after compression.`);
+    setSendingSms(false);
+    return;
+  }
+
+  const fileRef = ref(storage, `sms-media/${ghlData.contactId}/${Date.now()}_photo.jpg`);
+  await uploadBytes(fileRef, compressed);
+  const downloadURL = await getDownloadURL(fileRef);
+  attachments.push(downloadURL);
+}
+    // ========== END OF NEW CODE ==========
       const res = await fetch("https://us-central1-swarm-12-week-startup.cloudfunctions.net/createGhlNote", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -227,36 +309,71 @@ export default function App() {
   };
 
   // Handler: Send Outbound SMS via GHL
-  const handleSendGhlSms = async (e) => {
-    e.preventDefault();
-    if (!newSmsText.trim() || !ghlData.contactId) return;
+ const handleSendGhlSms = async (e) => {
+  e.preventDefault();
+  if ((!newSmsText.trim() && !smsFile) || !ghlData.contactId) return;
 
-    setSendingSms(true);
-    try {
-      const res = await fetch("https://us-central1-swarm-12-week-startup.cloudfunctions.net/sendGhlSms", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contactId: ghlData.contactId,
-          message: newSmsText.trim()
-        })
-      });
+  setSendingSms(true);
+  try {
+    let attachments = [];
 
-      const data = await res.json();
+    // Upload photo to Firebase Storage if one is selected
+   if (smsFile) {
+  // First pass
+  let compressed = await compressImage(smsFile, 700, 0.55);
+  console.log(`Pass 1: ${(compressed.size / 1024 / 1024).toFixed(2)} MB`);
 
-      if (res.ok && data.success) {
-        setNewSmsText("");
-        await fetchGhlDetails(selectedMember); // Auto-refresh conversation
-      } else {
-        alert(`Failed to send SMS: ${data.error || "Check GHL SMS scopes"}`);
-      }
-    } catch (err) {
-      console.error("Error sending GHL SMS:", err);
-      alert("Error connecting to server.");
-    } finally {
-      setSendingSms(false);
+  // Keep compressing if still too big
+  let attempt = 1;
+  while (compressed.size > 2.5 * 1024 * 1024 && attempt < 4) {
+    attempt++;
+    const newWidth = 600 - (attempt * 50);
+    const newQuality = 0.45 - (attempt * 0.05);
+    compressed = await compressImage(compressed, Math.max(newWidth, 400), Math.max(newQuality, 0.3));
+    console.log(`Pass ${attempt}: ${(compressed.size / 1024 / 1024).toFixed(2)} MB`);
+  }
+
+  console.log("Final compressed size:", (compressed.size / 1024 / 1024).toFixed(2), "MB");
+
+  if (compressed.size > 3 * 1024 * 1024) {
+    alert(`Image is still too large (${(compressed.size / 1024 / 1024).toFixed(1)} MB) after compression.`);
+    setSendingSms(false);
+    return;
+  }
+
+  const fileRef = ref(storage, `sms-media/${ghlData.contactId}/${Date.now()}_photo.jpg`);
+  await uploadBytes(fileRef, compressed);
+  const downloadURL = await getDownloadURL(fileRef);
+  attachments.push(downloadURL);
+}
+
+    const res = await fetch("https://us-central1-swarm-12-week-startup.cloudfunctions.net/sendGhlSms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contactId: ghlData.contactId,
+        message: newSmsText.trim() || "",
+        attachments: attachments.length > 0 ? attachments : undefined
+      })
+    });
+
+    const data = await res.json();
+
+    if (res.ok && data.success) {
+      setNewSmsText("");
+      setSmsFile(null);
+      setSmsFilePreview(null);
+      await fetchGhlDetails(selectedMember); // refresh conversation
+    } else {
+      alert(`Failed to send SMS: ${data.error || "Check GHL SMS scopes"}`);
     }
-  };
+  } catch (err) {
+    console.error("Error sending GHL SMS:", err);
+    alert("Error connecting to server or uploading image.");
+  } finally {
+    setSendingSms(false);
+  }
+};
 
   // Toggle InBody scan directly
   const handleToggleScan = async (memberId, scanKey, e) => {
@@ -617,12 +734,13 @@ export default function App() {
     };
   }
 
+
   const todayKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
 
   if (loading) {
     return (
       <div style={styles.loadingContainer}>
-        <h2>Loading 12-Week Member Onboarding...</h2>
+        <h2>Loading Swarm Member Retention...</h2>
       </div>
     );
   }
@@ -632,7 +750,7 @@ export default function App() {
       {/* Header */}
       <header style={styles.header}>
         <div>
-          <h1 style={styles.title}>12-Week Onboarding Dashboard</h1>
+          <h1 style={styles.title}>Swarm Member Retention Dashboard</h1>
           <p style={styles.subtitle}>Click any member row to view full stats, adjust check-ins & edit dates</p>
         </div>
         <div style={{ display: "flex", gap: "10px" }}>
@@ -833,6 +951,10 @@ export default function App() {
     onSaveEdit={handleSavePersonEdits}
     onDeleteMember={handleDeleteMember}
     onToggleScan={handleToggleScan}
+    smsFile={smsFile}
+  setSmsFile={setSmsFile}
+  smsFilePreview={smsFilePreview}
+  setSmsFilePreview={setSmsFilePreview}
   />
 )}
 
