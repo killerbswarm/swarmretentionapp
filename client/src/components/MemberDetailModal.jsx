@@ -44,6 +44,8 @@ export default function MemberDetailModal(props) {
     setSmsFile,
     smsFilePreview,
     setSmsFilePreview,
+    sendAsInternal,
+    setSendAsInternal,
   } = props;
 
   if (!selectedMember || !personStats) return null;
@@ -114,6 +116,8 @@ export default function MemberDetailModal(props) {
   setSmsFile={setSmsFile}
   smsFilePreview={smsFilePreview}
   setSmsFilePreview={setSmsFilePreview}
+  sendAsInternal={sendAsInternal}
+  setSendAsInternal={setSendAsInternal}
 />
 
             {/* Edit Settings */}

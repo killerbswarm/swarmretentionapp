@@ -23,6 +23,8 @@ export default function MemberTabs({
   setSmsFile,
   smsFilePreview,
   setSmsFilePreview,
+  sendAsInternal,
+  setSendAsInternal,
 }) {
   return (
     <div style={styles.sectionCard}>
@@ -131,6 +133,41 @@ export default function MemberTabs({
               }}
             >
               {ghlData.messages.map((msg) => {
+  const isInternal =
+    msg.messageType === "TYPE_INTERNAL_COMMENT" || msg.type === 37;
+
+  if (isInternal) {
+    return (
+      <div
+        key={msg.id}
+        style={{
+          alignSelf: "center",
+          backgroundColor: "#fef9c3",
+          border: "1px solid #fde047",
+          color: "#713f12",
+          padding: "8px 12px",
+          borderRadius: "8px",
+          maxWidth: "90%",
+          fontSize: "13px",
+        }}
+      >
+        <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4 }}>
+          📝 Internal Comment
+        </div>
+        <div style={{ whiteSpace: "pre-wrap" }}>
+          {msg.body || msg.bodyText || ""}
+        </div>
+        <div style={{ fontSize: 10, opacity: 0.7, marginTop: 4, textAlign: "right" }}>
+          {new Date(msg.dateAdded || msg.date).toLocaleString("en-US", {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          })}
+        </div>
+      </div>
+    );
+  }
   const isOutbound = msg.direction === "outbound";
   const attachments = msg.attachments || msg.meta?.attachments || [];
 
@@ -278,7 +315,14 @@ export default function MemberTabs({
           }}
         />
       </label>
-
+      <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+    <input
+      type="checkbox"
+      checked={sendAsInternal}
+      onChange={(e) => setSendAsInternal(e.target.checked)}
+    />
+    Internal comment (not sent to member)
+  </label>
       <button
         type="submit"
         disabled={sendingSms || (!newSmsText.trim() && !smsFile)}

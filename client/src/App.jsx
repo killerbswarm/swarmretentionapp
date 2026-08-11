@@ -50,6 +50,7 @@ export default function App() {
   const [mainTab, setMainTab] = useState("twelve_week"); // "twelve_week" | "at_risk"
   const [selectedAtRiskMember, setSelectedAtRiskMember] = useState(null);
   const [showAddAtRiskModal, setShowAddAtRiskModal] = useState(false);
+  const [sendAsInternal, setSendAsInternal] = useState(false);
 
   // Person View Modal State
   const [selectedMember, setSelectedMember] = useState(null);
@@ -333,6 +334,41 @@ if (smsFile) {
   // Handler: Send Outbound SMS via GHL
  const handleSendGhlSms = async (e) => {
   e.preventDefault();
+  if (sendAsInternal) {
+  if (!newSmsText.trim() || !ghlData.contactId) return;
+
+  setSendingSms(true);
+  try {
+    const res = await fetch(
+      "https://us-central1-swarm-12-week-startup.cloudfunctions.net/sendGhlInternalComment",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contactId: ghlData.contactId,
+          message: newSmsText.trim(),
+        }),
+      }
+    );
+    const data = await res.json();
+
+    if (res.ok && data.success) {
+      setNewSmsText("");
+      setSendAsInternal(false);
+      await fetchGhlDetails(selectedMember); // your existing refresh
+    } else {
+      alert(data.error || "Failed to post internal comment");
+    }
+  } catch (err) {
+    console.error(err);
+    alert("Error posting internal comment");
+  } finally {
+    setSendingSms(false);
+  }
+  return;
+}
+
+// ... existing normal SMS logic stays below
   if ((!newSmsText.trim() && !smsFile) || !ghlData.contactId) return;
 
   setSendingSms(true);
@@ -1197,6 +1233,8 @@ if (smsFile) {
   setSmsFile={setSmsFile}
   smsFilePreview={smsFilePreview}
   setSmsFilePreview={setSmsFilePreview}
+  sendAsInternal={sendAsInternal}
+setSendAsInternal={setSendAsInternal}
   />
 )}
   {selectedAtRiskMember && (

@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { stripHtml } from "../utils/helpers";
+import { storage } from "../firebase";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 export default function AtRiskDetailModal({
   member,
@@ -10,11 +12,18 @@ export default function AtRiskDetailModal({
   const [loadingGhl, setLoadingGhl] = useState(false);
   const [activeTab, setActiveTab] = useState("messages");
   const [newNoteText, setNewNoteText] = useState("");
-  const [addingNote, setAddingNote] = useState(false);
   const [newSmsText, setNewSmsText] = useState("");
   const [sendingSms, setSendingSms] = useState(false);
   const [smsFile, setSmsFile] = useState(null);
   const [smsFilePreview, setSmsFilePreview] = useState(null);
+  const [sendAsInternal, setSendAsInternal] = useState(false);
+  const [addingNote, setAddingNote] = useState(false);
+
+  const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [ghlData.messages]);
 
   // Fetch GHL data when modal opens
   useEffect(() => {
@@ -82,20 +91,67 @@ const lastSmsStr = lastSmsDate
       })
     : "—";
 
-  const handleSendSms = async (e) => {
+const handleSendSms = async (e) => {
   e.preventDefault();
-  if ((!newSmsText.trim() && !smsFile) || !ghlData.contactId) return;
+  if (!ghlData.contactId) return;
+
+  // ===== INTERNAL COMMENT =====
+  if (sendAsInternal) {
+    if (!newSmsText.trim()) return;
+
+    setSendingSms(true);
+    try {
+      const res = await fetch(
+        "https://us-central1-swarm-12-week-startup.cloudfunctions.net/sendGhlInternalComment",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contactId: ghlData.contactId,
+            message: newSmsText.trim(),
+          }),
+        }
+      );
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        setNewSmsText("");
+        setSendAsInternal(false);
+
+        const params = new URLSearchParams();
+        if (member.ghlContactId) params.append("contactId", member.ghlContactId);
+        if (member.email) params.append("email", member.email);
+
+        const refreshRes = await fetch(
+          `https://us-central1-swarm-12-week-startup.cloudfunctions.net/getGhlContactDetails?${params}`
+        );
+        const refreshData = await refreshRes.json();
+        setGhlData({
+          messages: refreshData.messages || [],
+          notes: refreshData.notes || [],
+          contactId: refreshData.contactId || ghlData.contactId,
+        });
+      } else {
+        alert(data.error || "Failed to post internal comment");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error posting internal comment: " + (err?.message || String(err)));
+    } finally {
+      setSendingSms(false);
+    }
+    return;
+  }
+
+  // ===== NORMAL SMS =====
+  if (!newSmsText.trim() && !smsFile) return;
 
   setSendingSms(true);
   try {
     let attachments = [];
 
     if (smsFile) {
-      // You can reuse the same compress + upload logic here,
-      // or for now just upload without compression to test
-      const { ref, uploadBytes, getDownloadURL } = await import("firebase/storage");
-      const { storage } = await import("../firebase");
-
       const fileRef = ref(
         storage,
         `sms-media/${ghlData.contactId}/${Date.now()}_photo.jpg`
@@ -120,31 +176,30 @@ const lastSmsStr = lastSmsDate
 
     const data = await res.json();
 
-   if (res.ok && data.success) {
-  setNewSmsText("");
-  setSmsFile(null);
-  setSmsFilePreview(null);
+    if (res.ok && data.success) {
+      setNewSmsText("");
+      setSmsFile(null);
+      setSmsFilePreview(null);
 
-  // Refresh the conversation
-  const params = new URLSearchParams();
-  if (member.ghlContactId) params.append("contactId", member.ghlContactId);
-  if (member.email) params.append("email", member.email);
+      const params = new URLSearchParams();
+      if (member.ghlContactId) params.append("contactId", member.ghlContactId);
+      if (member.email) params.append("email", member.email);
 
-  const refreshRes = await fetch(
-    `https://us-central1-swarm-12-week-startup.cloudfunctions.net/getGhlContactDetails?${params}`
-  );
-  const refreshData = await refreshRes.json();
-  setGhlData({
-    messages: refreshData.messages || [],
-    notes: refreshData.notes || [],
-    contactId: refreshData.contactId || ghlData.contactId,
-  });
-} else {
-      alert(`Failed to send SMS: ${data.error || "Unknown error"}`);
+      const refreshRes = await fetch(
+        `https://us-central1-swarm-12-week-startup.cloudfunctions.net/getGhlContactDetails?${params}`
+      );
+      const refreshData = await refreshRes.json();
+      setGhlData({
+        messages: refreshData.messages || [],
+        notes: refreshData.notes || [],
+        contactId: refreshData.contactId || ghlData.contactId,
+      });
+    } else {
+      alert(data.error || "Failed to send SMS");
     }
   } catch (err) {
     console.error(err);
-    alert("Error sending SMS");
+    alert("Error sending SMS: " + (err?.message || String(err)));
   } finally {
     setSendingSms(false);
   }
@@ -205,63 +260,141 @@ const lastSmsStr = lastSmsDate
     <p style={{ color: "#64748b" }}>Loading GHL data...</p>
   ) : activeTab === "messages" ? (
     <div>
+   
       {ghlData.messages.length === 0 ? (
         <p style={{ color: "#94a3b8", fontStyle: "italic" }}>No SMS history found</p>
       ) : (
-        <div style={styles.messageList}>
-          {ghlData.messages.map((msg) => {
-            const isOutbound = msg.direction === "outbound";
-            const attachments = msg.attachments || [];
+        
+      <div
+  style={{
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
+    maxHeight: "320px",
+    overflowY: "auto",
+    paddingRight: 4,
+  }}
+>
+  {[...(ghlData.messages || [])]
+    .sort(
+      (a, b) =>
+        new Date(a.dateAdded || a.date || 0) -
+        new Date(b.dateAdded || b.date || 0)
+    )
+    .map((msg) => {
+      const isInternal =
+        msg.messageType === "TYPE_INTERNAL_COMMENT" || msg.type === 37;
 
-            return (
-              <div
-                key={msg.id || Math.random()}
-                style={{
-                  ...styles.messageBubble,
-                  alignSelf: isOutbound ? "flex-end" : "flex-start",
-                  backgroundColor: isOutbound ? "#2563eb" : "#f1f5f9",
-                  color: isOutbound ? "#fff" : "#0f172a",
-                }}
-              >
-                {msg.body && (
-                  <div style={{ whiteSpace: "pre-wrap" }}>{msg.body}</div>
-                )}
+      if (isInternal) {
+        return (
+          <div
+            key={msg.id || Math.random()}
+            style={{
+              alignSelf: "center",
+              backgroundColor: "#fef9c3",
+              border: "1px solid #fde047",
+              color: "#713f12",
+              padding: "8px 12px",
+              borderRadius: "8px",
+              maxWidth: "90%",
+              fontSize: "13px",
+            }}
+          >
+            <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4 }}>
+              📝 Internal Comment
+            </div>
+            <div style={{ whiteSpace: "pre-wrap" }}>
+              {msg.body || msg.bodyText || "(empty)"}
+            </div>
+            <div
+              style={{
+                fontSize: 10,
+                opacity: 0.7,
+                marginTop: 4,
+                textAlign: "right",
+              }}
+            >
+              {new Date(msg.dateAdded || msg.date || Date.now()).toLocaleString(
+                "en-US",
+                {
+                  month: "short",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                }
+              )}
+            </div>
+          </div>
+        );
+      }
 
-                {attachments.length > 0 && (
-                  <div style={{ marginTop: msg.body ? "8px" : 0 }}>
-                    {attachments.map((url, idx) => (
-                      <img
-                        key={idx}
-                        src={typeof url === "string" ? url : url.url}
-                        alt="Attachment"
-                        style={{
-                          maxWidth: "100%",
-                          borderRadius: "6px",
-                          cursor: "pointer",
-                        }}
-                        onClick={() =>
-                          window.open(
-                            typeof url === "string" ? url : url.url,
-                            "_blank"
-                          )
-                        }
-                      />
-                    ))}
-                  </div>
-                )}
+      const isOutbound = msg.direction === "outbound";
+      const attachments = msg.attachments || [];
 
-                <div style={styles.messageTime}>
-                  {new Date(msg.dateAdded || msg.date).toLocaleString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                    hour: "numeric",
-                    minute: "2-digit",
-                  })}
-                </div>
-              </div>
-            );
-          })}
+      return (
+        <div
+          key={msg.id || Math.random()}
+          style={{
+            alignSelf: isOutbound ? "flex-end" : "flex-start",
+            backgroundColor: isOutbound ? "#2563eb" : "#f1f5f9",
+            color: isOutbound ? "#fff" : "#0f172a",
+            padding: "8px 12px",
+            borderRadius: "10px",
+            maxWidth: "80%",
+            fontSize: "13px",
+          }}
+        >
+          {(msg.body || msg.bodyText) && (
+            <div style={{ whiteSpace: "pre-wrap" }}>
+              {msg.body || msg.bodyText}
+            </div>
+          )}
+          {attachments.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              {attachments.map((url, idx) => (
+                <img
+                  key={idx}
+                  src={typeof url === "string" ? url : url?.url}
+                  alt=""
+                  style={{
+                    maxWidth: "100%",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                  }}
+                  onClick={() =>
+                    window.open(
+                      typeof url === "string" ? url : url?.url,
+                      "_blank"
+                    )
+                  }
+                />
+              ))}
+            </div>
+          )}
+          <div
+            style={{
+              fontSize: 10,
+              opacity: 0.7,
+              marginTop: 4,
+              textAlign: "right",
+            }}
+          >
+            {new Date(msg.dateAdded || msg.date || Date.now()).toLocaleString(
+              "en-US",
+              {
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              }
+            )}
+          </div>
         </div>
+      );
+    })}
+    <div ref={messagesEndRef} />
+</div>
+ 
       )}
 
       {/* Compose box */}
@@ -368,7 +501,14 @@ const lastSmsStr = lastSmsDate
                 }}
               />
             </label>
-
+            <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+  <input
+    type="checkbox"
+    checked={sendAsInternal}
+    onChange={(e) => setSendAsInternal(e.target.checked)}
+  />
+  Internal comment (not sent to member)
+</label>
             <button
               type="submit"
               disabled={sendingSms || (!(newSmsText || "").trim() && !smsFile)}

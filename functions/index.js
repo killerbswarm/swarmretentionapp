@@ -334,9 +334,15 @@ exports.getGhlContactDetails = onRequest(
       let messages = [];
       const conversationId = convosData.conversations?.[0]?.id;
       if (conversationId) {
-        const msgRes = await fetch(`https://services.leadconnectorhq.com/conversations/${conversationId}/messages`, {
-          headers: { Authorization: `Bearer ${GHL_API_TOKEN.value()}`, Version: GHL_API_VERSION },
-        });
+      const msgRes = await fetch(
+  `https://services.leadconnectorhq.com/conversations/${conversationId}/messages?type=TYPE_SMS,TYPE_INTERNAL_COMMENTS&limit=30`,
+  {
+    headers: {
+      Authorization: `Bearer ${GHL_API_TOKEN.value()}`,
+      Version: GHL_API_VERSION,
+    },
+  }
+);
         const msgData = await msgRes.json();
         messages = msgData.messages?.messages || [];
       }
@@ -558,6 +564,60 @@ exports.ghlAtRiskCheckInWebhook = onRequest(
     } catch (err) {
       console.error("At Risk Check-In Webhook Error:", err);
       return res.status(500).json({ error: "Internal Server Error", details: err.message });
+    }
+  }
+);
+
+// =========================================================================
+// ENDPOINT: Send Internal Comment (shows in conversation feed, not SMS)
+// =========================================================================
+exports.sendGhlInternalComment = onRequest(
+  { cors: true, secrets: [GHL_API_TOKEN, GHL_USER_ID] },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
+
+      const { contactId, message } = req.body;
+
+      if (!contactId || !message) {
+        return res.status(400).json({ error: "Missing contactId or message" });
+      }
+
+      const response = await fetch(
+        "https://services.leadconnectorhq.com/conversations/messages",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${GHL_API_TOKEN.value()}`,
+            Version: GHL_API_VERSION,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "InternalComment",
+            contactId: contactId,
+            message: message,
+            userId: GHL_USER_ID.value(),
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        console.error("GHL Internal Comment Error:", data);
+        return res.status(400).json({
+          error: data.message || "Failed to post internal comment",
+          details: data,
+        });
+      }
+
+      return res.status(200).json({ success: true, message: data });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({
+        error: "Internal Server Error",
+        details: err.message,
+      });
     }
   }
 );
