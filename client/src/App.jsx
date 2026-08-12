@@ -135,6 +135,13 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
     img.src = url;
   });
 }
+  useEffect(() => {
+  if (!selectedAtRiskMember) return;
+  const fresh = atRiskMembers.find((m) => m.id === selectedAtRiskMember.id);
+  if (fresh) setSelectedAtRiskMember(fresh);
+}, [atRiskMembers]);
+
+
   // Monitor Auth State
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
@@ -1155,13 +1162,14 @@ const handleAddManualCheckIn = async () => {
     <div style={styles.tableContainer}>
       <table style={styles.table}>
         <thead>
-          <tr style={styles.tableHeader}>
-            <th style={styles.th}>Member</th>
-            <th style={styles.th}>Days Out</th>
-            <th style={styles.th}>Last Check-In</th>
-            <th style={styles.th}>At Risk Since</th>
-            <th style={{ ...styles.th, textAlign: "right" }}>Details</th>
-          </tr>
+        <tr style={styles.tableHeader}>
+          <th style={styles.th}>Member</th>
+          <th style={styles.th}>Days Out</th>
+          <th style={styles.th}>Last Check-In</th>
+          <th style={styles.th}>At Risk Since</th>
+          <th style={styles.th}>Reach-outs</th>   {/* ✅ ADD THIS */}
+          <th style={{ ...styles.th, textAlign: "right" }}>Details</th>
+        </tr>
         </thead>
         <tbody>
           {atRiskMembers.length === 0 ? (
@@ -1207,6 +1215,26 @@ const handleAddManualCheckIn = async () => {
                     ? new Date(member.atRiskSince).toLocaleDateString()
                     : "—"}
                 </td>
+                {/* ✅ ADD THIS CELL */}
+<td style={styles.td}>
+  {(member.reachOuts || []).length === 0 ? (
+    <span style={{ color: "#94a3b8", fontSize: 12 }}>None</span>
+  ) : (
+    <span
+      style={{
+        backgroundColor: "#dbeafe",
+        color: "#1d4ed8",
+        padding: "3px 8px",
+        borderRadius: 6,
+        fontSize: 12,
+        fontWeight: 700,
+      }}
+    >
+      {(member.reachOuts || []).length} reach-out
+      {(member.reachOuts || []).length === 1 ? "" : "s"}
+    </span>
+  )}
+</td>
                 <td style={{ ...styles.td, textAlign: "right", color: "#64748b" }}>
                   View →
                 </td>
