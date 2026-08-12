@@ -75,7 +75,25 @@ export default function MemberTabs({
           ) : memberCheckIns.length === 0 ? (
             <p style={{ color: "#9ca3af", fontStyle: "italic", fontSize: "13px" }}>
               No check-ins logged yet.
+              <button
+  onClick={onManualCheckIn}
+  style={{
+    backgroundColor: "#16a34a",
+    color: "#fff",
+    border: "none",
+    padding: "10px 16px",
+    borderRadius: "8px",
+    fontWeight: "600",
+    cursor: "pointer",
+    marginTop: "12px",
+  }}
+>
+  {selectedMember?.status === "pending"
+    ? "✓ Log First Check-In (Start 12-Week)"
+    : "+ Add Manual Check-In"}
+</button>
             </p>
+            
           ) : (
             <div style={styles.historyLogList}>
               {memberCheckIns.map((log) => (

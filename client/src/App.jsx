@@ -451,21 +451,58 @@ if (smsFile) {
   };
 
   // Add a manual check-in log inside Person View
-  const handleAddManualCheckIn = async () => {
-    if (!selectedMember) return;
-    const now = new Date();
-    const currentWeek = selectedMember.currentWeek || 1;
+const handleAddManualCheckIn = async () => {
+  if (!selectedMember) return;
 
-    const currentWeeklyCounts = selectedMember.weeklyCheckIns || {};
+  const now = new Date();
+  const memberRef = doc(db, "members", selectedMember.id);
+
+  try {
+    // First check-in for a pending member (same as webhook)
+    if (selectedMember.status === "pending") {
+      const memberData = {
+        startDate: now.toISOString(),
+        currentWeek: 1,
+        weekOverride: null,
+        status: "active",
+        weeklyCheckIns: { 1: 1 },
+        lastCheckIn: now.toISOString(),
+        riskLevel: "high",
+      };
+
+      await updateDoc(memberRef, memberData);
+
+      const newLog = {
+        memberId: selectedMember.id,
+        email: selectedMember.email || "",
+        timestamp: now.toISOString(),
+        weekNumber: 1,
+        source: "Manual Check-In (Dashboard)",
+      };
+      const logRef = await addDoc(collection(db, "check_ins"), newLog);
+      setMemberCheckIns((prev) => [{ id: logRef.id, ...newLog }, ...prev]);
+      return;
+    }
+
+    // Existing active member
+    const currentWeek =
+      selectedMember.currentWeek ||
+      1;
+
+    const currentWeeklyCounts = { ...(selectedMember.weeklyCheckIns || {}) };
     const newCount = (currentWeeklyCounts[currentWeek] || 0) + 1;
     currentWeeklyCounts[currentWeek] = newCount;
 
-    const riskInfo = getMemberRiskInfo(newCount, selectedMember.startDate, selectedMember.status);
+    const riskInfo = getMemberRiskInfo(
+      newCount,
+      selectedMember.startDate,
+      selectedMember.status
+    );
 
-    await updateDoc(doc(db, "members", selectedMember.id), {
+    await updateDoc(memberRef, {
       weeklyCheckIns: currentWeeklyCounts,
       lastCheckIn: now.toISOString(),
-      riskLevel: riskInfo.level
+      riskLevel: riskInfo.level,
     });
 
     const newLog = {
@@ -473,12 +510,15 @@ if (smsFile) {
       email: selectedMember.email || "",
       timestamp: now.toISOString(),
       weekNumber: currentWeek,
-      source: "Manual Check-In (Dashboard)"
+      source: "Manual Check-In (Dashboard)",
     };
     const logRef = await addDoc(collection(db, "check_ins"), newLog);
-
-    setMemberCheckIns(prev => [{ id: logRef.id, ...newLog }, ...prev]);
-  };
+    setMemberCheckIns((prev) => [{ id: logRef.id, ...newLog }, ...prev]);
+  } catch (err) {
+    console.error(err);
+    alert("Failed to add check-in");
+  }
+};
 
   // Delete Individual Check-In Log
   const handleDeleteCheckIn = async (log) => {
@@ -920,6 +960,33 @@ if (smsFile) {
         </div>
       </div>
     </div>
+        {/* FILTERS */}
+    <div style={styles.filterBar}>
+      <button
+        style={filter === "all" ? styles.activeFilterBtn : styles.filterBtn}
+        onClick={() => setFilter("all")}
+      >
+        All Members ({members.filter(m => m.status !== "cancelled").length})
+      </button>
+      <button
+        style={filter === "pending" ? styles.activeFilterBtn : styles.filterBtn}
+        onClick={() => setFilter("pending")}
+      >
+        ⏳ Pending ({pendingMembers.length})
+      </button>
+      <button
+        style={filter === "active" ? styles.activeFilterBtn : styles.filterBtn}
+        onClick={() => setFilter("active")}
+      >
+        🔥 Active ({activeMembers.length})
+      </button>
+      <button
+        style={filter === "high_risk" ? styles.activeFilterBtn : styles.filterBtn}
+        onClick={() => setFilter("high_risk")}
+      >
+        ⚠️ High Risk ({highRiskMembers.length})
+      </button>
+    </div>
      {/* Main Table */}
       <div style={styles.tableContainer}>
         <table style={styles.table}>
@@ -1037,52 +1104,8 @@ if (smsFile) {
           </tbody>
         </table>
       </div>
-    {/* FILTERS */}
-    <div style={styles.filterBar}>
-      <button
-        style={filter === "all" ? styles.activeFilterBtn : styles.filterBtn}
-        onClick={() => setFilter("all")}
-      >
-        All Members ({members.filter(m => m.status !== "cancelled").length})
-      </button>
-      <button
-        style={filter === "pending" ? styles.activeFilterBtn : styles.filterBtn}
-        onClick={() => setFilter("pending")}
-      >
-        ⏳ Pending ({pendingMembers.length})
-      </button>
-      <button
-        style={filter === "active" ? styles.activeFilterBtn : styles.filterBtn}
-        onClick={() => setFilter("active")}
-      >
-        🔥 Active ({activeMembers.length})
-      </button>
-      <button
-        style={filter === "high_risk" ? styles.activeFilterBtn : styles.filterBtn}
-        onClick={() => setFilter("high_risk")}
-      >
-        ⚠️ High Risk ({highRiskMembers.length})
-      </button>
-    </div>
 
-    {/* 12-WEEK MEMBERS TABLE */}
-    <div style={styles.tableContainer}>
-      <table style={styles.table}>
-        <thead>
-          <tr style={styles.tableHeader}>
-            <th style={styles.th}>Member Name</th>
-            <th style={styles.th}>Week</th>
-            <th style={styles.th}>InBody Scans</th>
-            <th style={styles.th}>This Wk Visits</th>
-            <th style={styles.th}>12-Week Attendance Matrix</th>
-            <th style={{ ...styles.th, textAlign: "right" }}>Details</th>
-          </tr>
-        </thead>
-        <tbody>
-          {/* Keep your existing filteredMembers.map(...) row code here */}
-        </tbody>
-      </table>
-    </div>
+
   </>
 )}
 
