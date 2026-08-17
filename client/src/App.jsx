@@ -33,6 +33,10 @@ import { storage } from "./firebase";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import AtRiskDetailModal from "./components/AtRiskDetailModal";
 import AddAtRiskModal from "./components/AddAtRiskModal";
+import { checkinsDb, collection as masterCol, onSnapshot as masterOnSnapshot, query as masterQuery, where as masterWhere } from "./checkinsFirebase";
+
+// Master check-in service (swarm-checkins)
+const CHECKINS_API = "https://us-central1-swarm-checkins-5436d.cloudfunctions.net";
 
 export default function App() {
   // Authentication State
@@ -56,6 +60,8 @@ export default function App() {
   const [selectedMember, setSelectedMember] = useState(null);
   const [memberCheckIns, setMemberCheckIns] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  // Live map from swarm-checkins: email -> { dates: string[], lastDate, lastClassName, lastClassTime, totalAttendanceCount }
+  const [masterByEmail, setMasterByEmail] = useState({});
   const [isEditing, setIsEditing] = useState(false);
   const [editFormData, setEditFormData] = useState({});
 
@@ -261,12 +267,62 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
     setLoadingHistory(true);
     
     try {
+      // 1) Local retention check_ins (existing)
       const checkInsRef = collection(db, "check_ins");
       const q = query(checkInsRef, where("memberId", "==", member.id));
       const querySnapshot = await getDocs(q);
-      const history = querySnapshot.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      const localHistory = querySnapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data(), source: doc.data().source || "local" }))
+        .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+
+      // 2) Master swarm-checkins by email
+      let masterHistory = [];
+      if (member.email) {
+        try {
+          const res = await fetch(
+            `${CHECKINS_API}/getCheckins?email=${encodeURIComponent(member.email.toLowerCase())}`
+          );
+          if (res.ok) {
+            const data = await res.json();
+            masterHistory = (data.checkins || []).map(c => ({
+              id: c.id,
+              email: c.email,
+              classDate: c.classDate,
+              className: c.className,
+              classTime: c.classTime,
+              totalAttendanceCount: c.totalAttendanceCount,
+              // normalize for calendar + sort
+              timestamp: c.classDate ? `${c.classDate}T12:00:00` : null,
+              source: "swarm-checkins"
+            }));
+          }
+        } catch (apiErr) {
+          console.error("Master check-ins API error:", apiErr);
+        }
+      }
+
+      // Merge: prefer unique dates; master + local
+      const byDate = new Map();
+      [...localHistory, ...masterHistory].forEach(item => {
+        let key = null;
+        if (item.classDate) key = item.classDate;
+        else if (item.timestamp) {
+          const d = new Date(item.timestamp);
+          if (!isNaN(d)) {
+            key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          }
+        }
+        if (!key) return;
+        const existing = byDate.get(key);
+        // prefer master record when both exist
+        if (!existing || item.source === "swarm-checkins") {
+          byDate.set(key, { ...item, _dateKey: key });
+        }
+      });
+
+      const history = Array.from(byDate.values()).sort((a, b) =>
+        (b._dateKey || "").localeCompare(a._dateKey || "")
+      );
 
       setMemberCheckIns(history);
     } catch (err) {
@@ -277,6 +333,101 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
 
     fetchGhlDetails(member);
   };
+
+
+
+  // Dashboard-wide live listener: all check-ins from master
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const unsub = masterOnSnapshot(
+      masterCol(checkinsDb, "checkins"),
+      (snap) => {
+        const map = {};
+        snap.docs.forEach((d) => {
+          const c = d.data();
+          const email = (c.email || "").toLowerCase();
+          if (!email || !c.classDate) return;
+          if (!map[email]) {
+            map[email] = {
+              dates: [],
+              lastDate: c.classDate,
+              lastClassName: c.className || "",
+              lastClassTime: c.classTime || "",
+              totalAttendanceCount: c.totalAttendanceCount ?? null
+            };
+          }
+          map[email].dates.push(c.classDate);
+          if (c.classDate >= map[email].lastDate) {
+            map[email].lastDate = c.classDate;
+            map[email].lastClassName = c.className || "";
+            map[email].lastClassTime = c.classTime || "";
+            if (c.totalAttendanceCount != null) {
+              map[email].totalAttendanceCount = c.totalAttendanceCount;
+            }
+          }
+        });
+        // sort dates unique
+        Object.keys(map).forEach((email) => {
+          map[email].dates = Array.from(new Set(map[email].dates)).sort();
+        });
+        setMasterByEmail(map);
+      },
+      (err) => console.error("Dashboard master check-ins listener:", err)
+    );
+
+    return () => unsub();
+  }, [isAuthenticated]);
+
+  // Live updates from swarm-checkins while a member is open
+  useEffect(() => {
+    if (!selectedMember?.email) return;
+
+    const email = selectedMember.email.toLowerCase();
+    const q = masterQuery(masterCol(checkinsDb, "checkins"), masterWhere("email", "==", email));
+
+    const unsub = masterOnSnapshot(q, (snap) => {
+      const masterHistory = snap.docs.map(d => {
+        const c = d.data();
+        return {
+          id: d.id,
+          email: c.email,
+          classDate: c.classDate,
+          className: c.className,
+          classTime: c.classTime,
+          totalAttendanceCount: c.totalAttendanceCount,
+          timestamp: c.classDate ? `${c.classDate}T12:00:00` : null,
+          source: "swarm-checkins",
+          _dateKey: c.classDate
+        };
+      });
+
+      setMemberCheckIns(prev => {
+        const byDate = new Map();
+        // keep local logs
+        (prev || []).forEach(item => {
+          if (item.source === "swarm-checkins") return;
+          let key = item.classDate || item._dateKey;
+          if (!key && item.timestamp) {
+            const d = new Date(item.timestamp);
+            if (!isNaN(d)) {
+              key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+            }
+          }
+          if (key) byDate.set(key, { ...item, _dateKey: key });
+        });
+        masterHistory.forEach(item => {
+          if (item._dateKey) byDate.set(item._dateKey, item);
+        });
+        return Array.from(byDate.values()).sort((a, b) =>
+          (b._dateKey || "").localeCompare(a._dateKey || "")
+        );
+      });
+    }, (err) => console.error("Master check-ins listener:", err));
+
+    return () => unsub();
+  }, [selectedMember?.id, selectedMember?.email]);
+
 
   // Handler: Create Staff Note in GHL
   const handleAddGhlNote = async (e) => {
@@ -751,16 +902,76 @@ const handleAddManualCheckIn = async () => {
 }
 
   // --- GLOBAL STATS CALCULATIONS ---
+
+  function getOnboardingWeekNumber(startDateStr) {
+    if (!startDateStr) return 1;
+    const start = new Date(startDateStr);
+    if (isNaN(start)) return 1;
+    start.setHours(0, 0, 0, 0);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const diffDays = Math.floor((now - start) / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) return 1;
+    return Math.min(12, Math.max(1, Math.floor(diffDays / 7) + 1));
+  }
+
+  function countMasterInWeek(member, weekNum) {
+    const email = (member.email || "").toLowerCase();
+    const entry = masterByEmail[email];
+    if (!entry || !member.startDate) return null;
+    const start = new Date(member.startDate);
+    if (isNaN(start)) return null;
+    start.setHours(0, 0, 0, 0);
+    const weekStart = new Date(start);
+    weekStart.setDate(weekStart.getDate() + (weekNum - 1) * 7);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    const startKey = [
+      weekStart.getFullYear(),
+      String(weekStart.getMonth() + 1).padStart(2, "0"),
+      String(weekStart.getDate()).padStart(2, "0")
+    ].join("-");
+    const endKey = [
+      weekEnd.getFullYear(),
+      String(weekEnd.getMonth() + 1).padStart(2, "0"),
+      String(weekEnd.getDate()).padStart(2, "0")
+    ].join("-");
+    return entry.dates.filter((d) => d >= startKey && d <= endKey).length;
+  }
+
+  // This week = master for current week; null if no master data for member
+  function getMasterWeekVisits(member) {
+    const email = (member.email || "").toLowerCase();
+    if (!masterByEmail[email]) return null;
+    const week = getOnboardingWeekNumber(member.startDate);
+    return countMasterInWeek(member, week);
+  }
+
+  // Matrix cell: master wins for current week; for past weeks use master if it has visits, else local history
+  function getWeekVisitCount(member, weekNum) {
+    const email = (member.email || "").toLowerCase();
+    const local = member.weeklyCheckIns?.[weekNum] || 0;
+    if (!masterByEmail[email]) return local;
+    const masterCount = countMasterInWeek(member, weekNum);
+    if (masterCount == null) return local;
+    const todayWeek = getOnboardingWeekNumber(member.startDate);
+    if (weekNum === todayWeek) return masterCount; // master is authority for current week
+    if (masterCount > 0) return masterCount;
+    return local;
+  }
+
   const pendingMembers = members.filter(m => m.status === "pending");
   const activeMembers = members.filter(m => m.status === "active");
   const highRiskMembers = activeMembers.filter(m => {
-    const currentWeekVisits = m.weeklyCheckIns?.[m.currentWeek] || 0;
+    const masterWeek = getMasterWeekVisits(m);
+    const currentWeekVisits = masterWeek != null ? masterWeek : (m.weeklyCheckIns?.[m.currentWeek] || 0);
     const risk = getMemberRiskInfo(currentWeekVisits, m.startDate, m.status);
     return risk.level === "high";
   });
   
   const totalThisWeekVisits = activeMembers.reduce((acc, m) => {
-    return acc + (m.weeklyCheckIns?.[m.currentWeek] || 0);
+    const masterWeek = getMasterWeekVisits(m);
+    return acc + (masterWeek != null ? masterWeek : (m.weeklyCheckIns?.[m.currentWeek] || 0));
   }, 0);
 
   const avgVisitsPerWeek = activeMembers.length 
@@ -843,10 +1054,16 @@ const handleAddManualCheckIn = async () => {
       : "No check-ins recorded";
 
     memberCheckIns.forEach(log => {
-      if (log.timestamp) {
+      if (log.classDate) {
+        checkInDatesSet.add(log.classDate);
+      } else if (log._dateKey) {
+        checkInDatesSet.add(log._dateKey);
+      } else if (log.timestamp) {
         const d = new Date(log.timestamp);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        checkInDatesSet.add(key);
+        if (!isNaN(d)) {
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          checkInDatesSet.add(key);
+        }
       }
     });
 
@@ -1011,7 +1228,8 @@ const handleAddManualCheckIn = async () => {
             {filteredMembers.map((member) => {
               const isAtRisk = filter === "at_risk" || !!member.atRiskSince;
               const isPending = member.status === "pending";
-              const thisWeekVisits = isPending ? 0 : (member.weeklyCheckIns?.[member.currentWeek] || 0);
+              const masterWeek = !isPending ? getMasterWeekVisits(member) : null;
+              const thisWeekVisits = isPending ? 0 : (masterWeek != null ? masterWeek : (member.weeklyCheckIns?.[member.currentWeek] || 0));
               const risk = getMemberRiskInfo(thisWeekVisits, member.startDate, member.status);
               const scans = member.inBodyScans || { scan1: false, scan2: false, scan3: false };
               const scanCount = (scans.scan1 ? 1 : 0) + (scans.scan2 ? 1 : 0) + (scans.scan3 ? 1 : 0);
@@ -1048,7 +1266,7 @@ const handleAddManualCheckIn = async () => {
         ) : isPending ? (
           <span style={styles.badgePending}>⏳ Pending</span>
         ) : (
-          <span style={styles.badgeWeek}>Week {member.currentWeek}</span>
+          <span style={styles.badgeWeek}>Week {getOnboardingWeekNumber(member.startDate) || member.currentWeek}</span>
         )}
       </td>
 
@@ -1075,14 +1293,15 @@ const handleAddManualCheckIn = async () => {
                       <div style={styles.matrixGrid}>
                         {[...Array(12)].map((_, i) => {
                           const weekNum = i + 1;
-                          const count = member.weeklyCheckIns?.[weekNum] || 0;
-                          const isCurrent = weekNum === member.currentWeek;
+                          const count = getWeekVisitCount(member, weekNum);
+                          const todayWeek = getOnboardingWeekNumber(member.startDate);
+                          const isCurrent = weekNum === todayWeek;
 
                           let bg = "#e5e7eb";
                           if (count >= 3) bg = "#22c55e";
                           else if (count === 2) bg = "#f59e0b";
                           else if (count === 1) bg = "#ef4444";
-                          else if (weekNum < member.currentWeek && count === 0) bg = "#9ca3af";
+                          else if (weekNum < todayWeek && count === 0) bg = "#9ca3af";
 
                           return (
                             <div 
@@ -1206,9 +1425,13 @@ const handleAddManualCheckIn = async () => {
                   </span>
                 </td>
                 <td style={styles.td}>
-                  {member.lastCheckIn
-                    ? new Date(member.lastCheckIn).toLocaleDateString()
-                    : "—"}
+                  {(() => {
+                    const email = (member.email || "").toLowerCase();
+                    const masterLast = masterByEmail[email]?.lastDate;
+                    if (masterLast) return masterLast;
+                    if (member.lastCheckIn) return new Date(member.lastCheckIn).toLocaleDateString();
+                    return "—";
+                  })()}
                 </td>
                 <td style={styles.td}>
                   {member.atRiskSince
