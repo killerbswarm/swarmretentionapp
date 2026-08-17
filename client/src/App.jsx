@@ -379,6 +379,51 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
     return () => unsub();
   }, [isAuthenticated]);
 
+
+  // Auto-remove from At Risk when master shows a check-in on/after the day they were flagged (or today)
+  useEffect(() => {
+    if (!isAuthenticated || !atRiskMembers.length) return;
+    if (!masterByEmail || Object.keys(masterByEmail).length === 0) return;
+
+    const today = new Date();
+    const todayKey = [
+      today.getFullYear(),
+      String(today.getMonth() + 1).padStart(2, "0"),
+      String(today.getDate()).padStart(2, "0")
+    ].join("-");
+
+    (async () => {
+      for (const member of atRiskMembers) {
+        const email = (member.email || "").toLowerCase();
+        if (!email) continue;
+        const entry = masterByEmail[email];
+        if (!entry?.lastDate) continue;
+
+        let threshold = todayKey;
+        if (member.atRiskSince) {
+          const d = new Date(member.atRiskSince);
+          if (!isNaN(d)) {
+            threshold = [
+              d.getFullYear(),
+              String(d.getMonth() + 1).padStart(2, "0"),
+              String(d.getDate()).padStart(2, "0")
+            ].join("-");
+          }
+        }
+
+        // Checked in on or after being marked at risk (or at least today)
+        if (entry.lastDate >= threshold || entry.lastDate >= todayKey) {
+          try {
+            await deleteDoc(doc(db, "atRiskMembers", member.id));
+            console.log(`At Risk cleared: ${member.firstName || ""} ${member.lastName || ""} (${email}) — check-in ${entry.lastDate}`);
+          } catch (err) {
+            console.error("Failed to clear At Risk:", err);
+          }
+        }
+      }
+    })();
+  }, [isAuthenticated, masterByEmail, atRiskMembers]);
+
   // Live updates from swarm-checkins while a member is open
   useEffect(() => {
     if (!selectedMember?.email) return;
