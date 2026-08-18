@@ -7,18 +7,22 @@ export default function StatsRow({ personStats, status }) {
         <span style={styles.personStatLabel}>Next Week Starts</span>
         <span style={styles.personStatValue}>{personStats.nextWeekStartDateStr}</span>
         <span style={styles.personStatSubText}>
-          {status === "pending" 
-            ? "Pending 1st visit" 
-            : (personStats.activeWeeks >= 12 
-                ? "12 Wks Completed" 
-                : `Week ${personStats.nextWeekNum} in ${personStats.daysUntilNextWeek} days`)}
+          {status === "pending"
+            ? "Pending 1st visit"
+            : personStats.activeWeeks >= 12
+            ? "12 Wks Completed"
+            : `Week ${personStats.nextWeekNum} in ${personStats.daysUntilNextWeek} days`}
         </span>
       </div>
 
       <div style={styles.personStatBox}>
         <span style={styles.personStatLabel}>Total Check-Ins</span>
         <span style={styles.personStatValue}>{personStats.totalAllTimeVisits} visits</span>
-        <span style={styles.personStatSubText}>Across all weeks</span>
+        <span style={styles.personStatSubText}>
+          {personStats.totalCheckinsSource === "chip"
+            ? "From Chalk It Pro"
+            : "Across all weeks"}
+        </span>
       </div>
 
       <div style={styles.personStatBox}>

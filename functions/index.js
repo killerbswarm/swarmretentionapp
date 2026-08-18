@@ -1,4 +1,5 @@
 const { onRequest } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 
@@ -619,5 +620,248 @@ exports.sendGhlInternalComment = onRequest(
         details: err.message,
       });
     }
+  }
+);
+
+
+// =========================================================================
+// DAILY: Flag members with no check-in in 7+ days (from swarm-checkins master)
+// Runs every day at 7:00 AM America/New_York
+
+// =========================================================================
+// DAILY: Flag members with no check-in in 7+ days (from swarm-checkins master)
+// Only if GHL has "member" tag; exclude punchcard / paused / drop-in
+// Runs every day at 7:00 AM America/New_York
+// =========================================================================
+const CHECKINS_API = "https://us-central1-swarm-checkins-5436d.cloudfunctions.net";
+const DAYS_MISSING_THRESHOLD = 7;
+
+function normalizeTags(tags) {
+  if (!tags) return [];
+  const list = Array.isArray(tags) ? tags : String(tags).split(",");
+  return list
+    .map((t) => {
+      let s = String(t).toLowerCase().trim();
+      // canonicalize common variants to our exact names
+      if (s === "drop in" || s === "dropin" || s === "drop_in") s = "drop-in";
+      if (s === "punch card") s = "punchcard";
+      if (s === "pause") s = "paused";
+      return s;
+    })
+    .filter(Boolean);
+}
+
+function hasTag(tags, ...exactNames) {
+  // exact match only (case already lowercased in normalizeTags)
+  return exactNames.some((n) => tags.includes(n));
+}
+
+/** GHL contact lookup by email — returns tags array or null */
+async function getGhlTagsForEmail(email, token, locationId) {
+  try {
+    const url =
+      `https://services.leadconnectorhq.com/contacts/search/duplicate?` +
+      `locationId=${encodeURIComponent(locationId)}&email=${encodeURIComponent(email)}`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Version: GHL_API_VERSION,
+        Accept: "application/json"
+      }
+    });
+    if (!res.ok) {
+      console.warn(`GHL lookup ${email}: HTTP ${res.status}`);
+      return null;
+    }
+    const data = await res.json();
+    const contact = data.contact || data.contacts?.[0] || null;
+    if (!contact) return null;
+    return normalizeTags(contact.tags || contact.tagsList || []);
+  } catch (err) {
+    console.warn(`GHL lookup error ${email}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * Eligible for At Risk only if:
+ *  - has "member" tag
+ *  - does NOT have punchcard, paused, or drop-in (drop in / dropin)
+ *  - member + punchcard → exclude
+ */
+function isEligibleMemberForAtRisk(tags) {
+  // Exact GHL tags: member | drop-in | punchcard | paused
+  if (!tags || !tags.length) return false;
+  if (!hasTag(tags, "member")) return false;
+  if (hasTag(tags, "punchcard")) return false;
+  if (hasTag(tags, "paused")) return false;
+  if (hasTag(tags, "drop-in")) return false;
+  return true;
+}
+
+exports.dailyAtRiskFromCheckins = onSchedule(
+  {
+    schedule: "0 7 * * *",
+    timeZone: "America/New_York",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    secrets: [GHL_API_TOKEN, GHL_LOCATION_ID]
+  },
+  async (event) => {
+    const now = new Date();
+    const todayKey = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0")
+    ].join("-");
+
+    const token = GHL_API_TOKEN.value();
+    const locationId = GHL_LOCATION_ID.value();
+
+    console.log(`dailyAtRiskFromCheckins starting ${todayKey}`);
+
+    // 1) Master check-ins
+    let checkins = [];
+    try {
+      const res = await fetch(`${CHECKINS_API}/getCheckins`);
+      if (!res.ok) throw new Error(`getCheckins HTTP ${res.status}`);
+      const data = await res.json();
+      checkins = data.checkins || [];
+    } catch (err) {
+      console.error("Failed to load master check-ins:", err);
+      throw err;
+    }
+
+    const lastByEmail = {};
+    for (const c of checkins) {
+      const email = (c.email || "").toLowerCase().trim();
+      const date = c.classDate;
+      if (!email || !date) continue;
+      if (!lastByEmail[email] || date > lastByEmail[email]) {
+        lastByEmail[email] = date;
+      }
+    }
+
+    // 2) Retention members + local check_ins (history before master existed)
+    const membersSnap = await db.collection("members").get();
+    const localCheckinsSnap = await db.collection("check_ins").get();
+    const localLastByEmail = {};
+    const localLastByMemberId = {};
+
+    const toDateKey = (val) => {
+      if (!val) return null;
+      let d = null;
+      if (typeof val === "string") d = new Date(val);
+      else if (val.toDate) d = val.toDate();
+      else if (val.seconds) d = new Date(val.seconds * 1000);
+      else if (val instanceof Date) d = val;
+      if (!d || isNaN(d)) return null;
+      return [
+        d.getFullYear(),
+        String(d.getMonth() + 1).padStart(2, "0"),
+        String(d.getDate()).padStart(2, "0")
+      ].join("-");
+    };
+
+    localCheckinsSnap.docs.forEach((d) => {
+      const data = d.data();
+      const key = data.classDate || toDateKey(data.timestamp);
+      if (!key) return;
+      const email = (data.email || "").toLowerCase().trim();
+      if (email && (!localLastByEmail[email] || key > localLastByEmail[email])) {
+        localLastByEmail[email] = key;
+      }
+      if (data.memberId && (!localLastByMemberId[data.memberId] || key > localLastByMemberId[data.memberId])) {
+        localLastByMemberId[data.memberId] = key;
+      }
+    });
+
+    const atRiskSnap = await db.collection("atRiskMembers").get();
+    const alreadyAtRisk = new Set();
+    atRiskSnap.docs.forEach((d) => {
+      const e = (d.data().email || "").toLowerCase().trim();
+      if (e) alreadyAtRisk.add(e);
+      alreadyAtRisk.add(d.id);
+    });
+
+    let added = 0;
+    let skipped = 0;
+    let excludedByTag = 0;
+
+    for (const docSnap of membersSnap.docs) {
+      const m = docSnap.data();
+      const email = (m.email || "").toLowerCase().trim();
+      if (!email) {
+        skipped++;
+        continue;
+      }
+      if (m.status === "cancelled" || m.status === "graduated" || m.status === "pending") {
+        skipped++;
+        continue;
+      }
+      if (alreadyAtRisk.has(email) || alreadyAtRisk.has(docSnap.id)) {
+        skipped++;
+        continue;
+      }
+
+      // 3) GHL tags gate
+      const tags = await getGhlTagsForEmail(email, token, locationId);
+      if (!isEligibleMemberForAtRisk(tags)) {
+        excludedByTag++;
+        console.log(
+          `Skip ${email}: tags=[${(tags || []).join(", ")}] (need member; exclude punchcard/paused/drop-in)`
+        );
+        continue;
+      }
+
+      // Last visit = newest of: master, local check_ins, member.lastCheckIn
+      // Do NOT treat "not in master yet" as never checked in.
+      const candidates = [
+        lastByEmail[email] || null,
+        localLastByEmail[email] || null,
+        localLastByMemberId[docSnap.id] || null,
+        toDateKey(m.lastCheckIn)
+      ].filter(Boolean);
+      const lastDate = candidates.length ? candidates.sort().pop() : null;
+
+      if (!lastDate) {
+        skipped++;
+        console.log(`Skip ${email}: no last check-in on master, local logs, or member record`);
+        continue;
+      }
+
+      const last = new Date(lastDate + "T12:00:00");
+      const daysOut = Math.floor((now - last) / (1000 * 60 * 60 * 24));
+      if (daysOut < DAYS_MISSING_THRESHOLD) {
+        skipped++;
+        continue;
+      }
+      const reason = `No check-in in ${daysOut} days (last: ${lastDate})`;
+
+      const docId = email.replace(/[^a-zA-Z0-9]/g, "_") || docSnap.id;
+      const atRiskData = {
+        firstName: m.firstName || "",
+        lastName: m.lastName || "",
+        email,
+        phone: m.phone || "",
+        memberId: docSnap.id,
+        lastCheckIn: lastDate ? new Date(lastDate + "T12:00:00").toISOString() : null,
+        atRiskSince: now.toISOString(),
+        daysOut,
+        reason,
+        ghlTags: tags,
+        source: "dailyAtRiskFromCheckins",
+        updatedAt: now.toISOString()
+      };
+
+      await db.collection("atRiskMembers").doc(docId).set(atRiskData, { merge: true });
+      added++;
+      console.log(`At Risk added: ${email} — ${reason}`);
+    }
+
+    console.log(
+      `dailyAtRiskFromCheckins done. added=${added} skipped=${skipped} excludedByTag=${excludedByTag}`
+    );
+    return { added, skipped, excludedByTag, date: todayKey };
   }
 );

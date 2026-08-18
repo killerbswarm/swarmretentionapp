@@ -1,11 +1,17 @@
 import React from "react";
 import { stripHtml } from "../../utils/helpers";
+import AttendanceCalendar from "./AttendanceCalendar";
+import InBodyScans from "./InBodyScans";
+import EditMemberForm from "./EditMemberForm";
+import MemberFooter from "./MemberFooter";
 
 export default function MemberTabs({
   activeTab,
   setActiveTab,
   selectedMember,
   memberCheckIns,
+  threeMonthCalendars,
+  checkInDatesSet,
   loadingHistory,
   ghlData,
   loadingGhl,
@@ -25,43 +31,94 @@ export default function MemberTabs({
   setSmsFilePreview,
   sendAsInternal,
   setSendAsInternal,
+  scansCompleted,
+  scanPct,
+  onToggleScan,
+  isEditing,
+  setIsEditing,
+  editFormData,
+  setEditFormData,
+  onSaveEdit,
+  onDeleteMember,
 }) {
   return (
     <div style={styles.sectionCard}>
       {/* Tab Buttons */}
       <div style={styles.tabHeaderBar}>
         <button
+          style={activeTab === "calendar" ? styles.tabBtnActive : styles.tabBtn}
+          onClick={() => setActiveTab("calendar")}
+        >
+          📅 Calendar
+        </button>
+        <button
+          style={activeTab === "scans" ? styles.tabBtnActive : styles.tabBtn}
+          onClick={() => setActiveTab("scans")}
+        >
+          🧍 Scans
+        </button>
+        <button
           style={activeTab === "logs" ? styles.tabBtnActive : styles.tabBtn}
           onClick={() => setActiveTab("logs")}
         >
-          📜 Check-In Logs ({memberCheckIns.length})
+          📜 Logs
         </button>
         <button
           style={activeTab === "messages" ? styles.tabBtnActive : styles.tabBtn}
           onClick={() => setActiveTab("messages")}
         >
-          💬 GHL SMS  ({ghlData.messages.length})
+          💬 SMS
         </button>
         <button
           style={activeTab === "notes" ? styles.tabBtnActive : styles.tabBtn}
           onClick={() => setActiveTab("notes")}
         >
-          📝 GHL Notes ({ghlData.notes.length})
+          📝 Notes
         </button>
         <button
           style={activeTab === "appts" ? styles.tabBtnActive : styles.tabBtn}
           onClick={() => setActiveTab("appts")}
         >
-          📅 GHL Appointments ({ghlData.appointments.length})
+          🗓️ Appointments
+        </button>
+        <button
+          style={activeTab === "settings" ? styles.tabBtnActive : styles.tabBtn}
+          onClick={() => setActiveTab("settings")}
+        >
+          ⚙️ Settings
         </button>
       </div>
 
-      {/* ===== TAB 1: CHECK-IN LOGS ===== */}
+      <div style={{
+        ...styles.tabBody,
+        overflowY: (activeTab === "messages" || activeTab === "logs") ? "hidden" : "auto",
+        display: (activeTab === "messages" || activeTab === "logs") ? "flex" : undefined,
+        flexDirection: (activeTab === "messages" || activeTab === "logs") ? "column" : undefined,
+      }}>
+      {activeTab === "calendar" && (
+        <AttendanceCalendar
+          selectedMember={selectedMember}
+          threeMonthCalendars={threeMonthCalendars}
+          checkInDatesSet={checkInDatesSet}
+          memberCheckIns={memberCheckIns}
+        />
+      )}
+
+      {activeTab === "scans" && (
+        <InBodyScans
+          selectedMember={selectedMember}
+          scansCompleted={scansCompleted}
+          scanPct={scanPct}
+          onToggleScan={onToggleScan}
+        />
+      )}
+
+      {/* ===== CHECK-IN LOGS ===== */}
       {activeTab === "logs" && (
-        <div>
+        <div style={styles.fillPanel}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
             <span style={{ fontSize: "12px", color: "#64748b" }}>
-              Raw attendance entries from GHL webhooks & manual logs
+              Attendance from Chalk It Pro and manual logs
             </span>
             {selectedMember.status === "active" && (
               <button style={styles.manualCheckInBtn} onClick={onManualCheckIn}>
@@ -129,7 +186,7 @@ export default function MemberTabs({
 
       {/* ===== TAB 2: SMS ===== */}
       {activeTab === "messages" && (
-        <div>
+        <div style={styles.smsPanel}>
           {loadingGhl ? (
             <p style={{ fontSize: "13px", color: "#64748b" }}>
               Loading SMS conversation thread from GoHighLevel...
@@ -139,17 +196,7 @@ export default function MemberTabs({
               No SMS conversation history found in GHL for this email.
             </p>
           ) : (
-            <div
-              style={{
-                maxHeight: "420px",
-                overflowY: "auto",
-                display: "flex",
-                flexDirection: "column-reverse",
-                gap: "8px",
-                paddingRight: "4px",
-                marginBottom: "12px",
-              }}
-            >
+            <div style={styles.smsThread}>
               {ghlData.messages.map((msg) => {
   const isInternal =
     msg.messageType === "TYPE_INTERNAL_COMMENT" || msg.type === 37;
@@ -449,6 +496,24 @@ export default function MemberTabs({
           )}
         </div>
       )}
+
+      {activeTab === "settings" && (
+        <div>
+          <EditMemberForm
+            isEditing={isEditing}
+            setIsEditing={setIsEditing}
+            editFormData={editFormData}
+            setEditFormData={setEditFormData}
+            selectedMember={selectedMember}
+            onSaveEdit={onSaveEdit}
+          />
+          <MemberFooter
+            memberId={selectedMember.id}
+            onDeleteMember={onDeleteMember}
+          />
+        </div>
+      )}
+      </div>
     </div>
   );
 }
@@ -459,13 +524,44 @@ const styles = {
     border: "1px solid #e2e8f0",
     borderRadius: "10px",
     padding: "16px",
-    marginBottom: "16px",
+    marginBottom: 0,
+    flex: 1,
+    minHeight: 0,
+    display: "flex",
+    flexDirection: "column",
   },
   tabHeaderBar: {
     display: "flex",
     gap: "6px",
     marginBottom: "14px",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
+    overflowX: "auto",
+    flexShrink: 0,
+  },
+  tabBody: {
+    flex: 1,
+    minHeight: 0,
+    overflowX: "hidden",
+    overflowY: "auto",
+  },
+  smsPanel: {
+    flex: 1,
+    height: "100%",
+    minHeight: 0,
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+  },
+  smsThread: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: "auto",
+    overflowX: "hidden",
+    display: "flex",
+    flexDirection: "column-reverse",
+    gap: "8px",
+    paddingRight: "4px",
+    marginBottom: "12px",
   },
   tabBtn: {
     padding: "6px 12px",
@@ -496,8 +592,16 @@ const styles = {
     fontWeight: "600",
     cursor: "pointer",
   },
+  fillPanel: {
+    flex: 1,
+    minHeight: 0,
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+  },
   historyLogList: {
-    maxHeight: "180px",
+    flex: 1,
+    minHeight: 0,
     overflowY: "auto",
     display: "flex",
     flexDirection: "column",

@@ -38,6 +38,60 @@ import { checkinsDb, collection as masterCol, onSnapshot as masterOnSnapshot, qu
 // Master check-in service (swarm-checkins)
 const CHECKINS_API = "https://us-central1-swarm-checkins-5436d.cloudfunctions.net";
 
+/** CHIP times like "6:15", "5:0", "5:00", "6:15 AM" → {h, m} */
+function parseClassTime(raw) {
+  if (!raw && raw !== 0) return null;
+  const s = String(raw).trim();
+  const ampm = s.match(/\s*(am|pm)$/i);
+  const core = s.replace(/\s*(am|pm)$/i, "").trim();
+  const parts = core.split(":");
+  if (!parts.length) return null;
+  let h = parseInt(parts[0], 10);
+  let m = parseInt(parts[1] || "0", 10);
+  if (isNaN(h)) return null;
+  if (isNaN(m)) m = 0;
+  if (ampm) {
+    const ap = ampm[1].toLowerCase();
+    if (ap === "pm" && h < 12) h += 12;
+    if (ap === "am" && h === 12) h = 0;
+  }
+  return { h, m };
+}
+
+function timestampFromClass(classDate, classTime) {
+  if (!classDate) return null;
+  const t = parseClassTime(classTime);
+  if (!t) return `${classDate}T12:00:00`;
+  return `${classDate}T${String(t.h).padStart(2, "0")}:${String(t.m).padStart(2, "0")}:00`;
+}
+
+function weekNumberFromStart(startDateStr, classDate) {
+  if (!startDateStr || !classDate) return null;
+  const start = new Date(startDateStr);
+  const day = new Date(`${classDate}T12:00:00`);
+  if (isNaN(start) || isNaN(day)) return null;
+  start.setHours(0, 0, 0, 0);
+  const diffDays = Math.floor((day - start) / (1000 * 60 * 60 * 24));
+  if (diffDays < 0) return 1;
+  return Math.min(12, Math.max(1, Math.floor(diffDays / 7) + 1));
+}
+
+function mapMasterCheckin(c, startDateStr) {
+  const classDate = c.classDate || null;
+  return {
+    id: c.id,
+    email: c.email,
+    classDate,
+    className: c.className,
+    classTime: c.classTime,
+    totalAttendanceCount: c.totalAttendanceCount,
+    timestamp: timestampFromClass(classDate, c.classTime),
+    weekNumber: weekNumberFromStart(startDateStr, classDate),
+    source: "swarm-checkins",
+    _dateKey: classDate
+  };
+}
+
 export default function App() {
   // Authentication State
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -62,11 +116,13 @@ export default function App() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   // Live map from swarm-checkins: email -> { dates: string[], lastDate, lastClassName, lastClassTime, totalAttendanceCount }
   const [masterByEmail, setMasterByEmail] = useState({});
+  // Local check_ins dates by email (for week counts during transition)
+  const [localDatesByEmail, setLocalDatesByEmail] = useState({});
   const [isEditing, setIsEditing] = useState(false);
   const [editFormData, setEditFormData] = useState({});
 
   // GHL Sync State inside Person View
-  const [activeTab, setActiveTab] = useState("logs");
+  const [activeTab, setActiveTab] = useState("calendar");
   const [ghlData, setGhlData] = useState({ contactId: null, notes: [], appointments: [], messages: [] });
   const [loadingGhl, setLoadingGhl] = useState(false);
 
@@ -253,7 +309,7 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
   // Open Person View, fetch Firestore logs and live GHL data
   const handleOpenPersonView = async (member) => {
     setSelectedMember(member);
-    setActiveTab("logs");
+    setActiveTab("calendar");
     setGhlData({ contactId: null, notes: [], appointments: [], messages: [] });
     setNewNoteText("");
     setNewSmsText("");
@@ -284,17 +340,9 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
           );
           if (res.ok) {
             const data = await res.json();
-            masterHistory = (data.checkins || []).map(c => ({
-              id: c.id,
-              email: c.email,
-              classDate: c.classDate,
-              className: c.className,
-              classTime: c.classTime,
-              totalAttendanceCount: c.totalAttendanceCount,
-              // normalize for calendar + sort
-              timestamp: c.classDate ? `${c.classDate}T12:00:00` : null,
-              source: "swarm-checkins"
-            }));
+            masterHistory = (data.checkins || []).map(c =>
+              mapMasterCheckin(c, member.startDate)
+            );
           }
         } catch (apiErr) {
           console.error("Master check-ins API error:", apiErr);
@@ -314,9 +362,16 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
         }
         if (!key) return;
         const existing = byDate.get(key);
-        // prefer master record when both exist
-        if (!existing || item.source === "swarm-checkins") {
+        if (!existing) {
           byDate.set(key, { ...item, _dateKey: key });
+        } else if (item.source === "swarm-checkins") {
+          const hasTime = !!parseClassTime(item.classTime);
+          byDate.set(key, {
+            ...item,
+            _dateKey: key,
+            timestamp: hasTime ? item.timestamp : (existing.timestamp || item.timestamp),
+            weekNumber: item.weekNumber || existing.weekNumber
+          });
         }
       });
 
@@ -335,6 +390,52 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
   };
 
 
+
+
+  // Load local check_ins dates once (merge with master for accurate week counts)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "check_ins"));
+        const map = {};
+        snap.docs.forEach((d) => {
+          const data = d.data();
+          const email = (data.email || "").toLowerCase().trim();
+          let key = null;
+          if (data.classDate) key = data.classDate;
+          else if (data.timestamp) {
+            const dt = new Date(data.timestamp);
+            if (!isNaN(dt)) {
+              key = [
+                dt.getFullYear(),
+                String(dt.getMonth() + 1).padStart(2, "0"),
+                String(dt.getDate()).padStart(2, "0")
+              ].join("-");
+            }
+          }
+          if (!key) return;
+          // prefer email key; also index by memberId for fallback
+          if (email) {
+            if (!map[email]) map[email] = new Set();
+            map[email].add(key);
+          }
+          if (data.memberId) {
+            const mk = `id:${data.memberId}`;
+            if (!map[mk]) map[mk] = new Set();
+            map[mk].add(key);
+          }
+        });
+        const out = {};
+        Object.keys(map).forEach((k) => {
+          out[k] = Array.from(map[k]).sort();
+        });
+        setLocalDatesByEmail(out);
+      } catch (err) {
+        console.error("Local check_ins load error:", err);
+      }
+    })();
+  }, [isAuthenticated]);
 
   // Dashboard-wide live listener: all check-ins from master
   useEffect(() => {
@@ -432,20 +533,9 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
     const q = masterQuery(masterCol(checkinsDb, "checkins"), masterWhere("email", "==", email));
 
     const unsub = masterOnSnapshot(q, (snap) => {
-      const masterHistory = snap.docs.map(d => {
-        const c = d.data();
-        return {
-          id: d.id,
-          email: c.email,
-          classDate: c.classDate,
-          className: c.className,
-          classTime: c.classTime,
-          totalAttendanceCount: c.totalAttendanceCount,
-          timestamp: c.classDate ? `${c.classDate}T12:00:00` : null,
-          source: "swarm-checkins",
-          _dateKey: c.classDate
-        };
-      });
+      const masterHistory = snap.docs.map(d =>
+        mapMasterCheckin({ id: d.id, ...d.data() }, selectedMember.startDate)
+      );
 
       setMemberCheckIns(prev => {
         const byDate = new Map();
@@ -462,7 +552,14 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
           if (key) byDate.set(key, { ...item, _dateKey: key });
         });
         masterHistory.forEach(item => {
-          if (item._dateKey) byDate.set(item._dateKey, item);
+          if (!item._dateKey) return;
+          const existing = byDate.get(item._dateKey);
+          const hasTime = !!parseClassTime(item.classTime);
+          byDate.set(item._dateKey, {
+            ...item,
+            timestamp: hasTime ? item.timestamp : (existing?.timestamp || item.timestamp),
+            weekNumber: item.weekNumber || existing?.weekNumber
+          });
         });
         return Array.from(byDate.values()).sort((a, b) =>
           (b._dateKey || "").localeCompare(a._dateKey || "")
@@ -960,11 +1057,8 @@ const handleAddManualCheckIn = async () => {
     return Math.min(12, Math.max(1, Math.floor(diffDays / 7) + 1));
   }
 
-  function countMasterInWeek(member, weekNum) {
-    const email = (member.email || "").toLowerCase();
-    const entry = masterByEmail[email];
-    if (!entry || !member.startDate) return null;
-    const start = new Date(member.startDate);
+  function getWeekDateRange(startDateStr, weekNum) {
+    const start = new Date(startDateStr);
     if (isNaN(start)) return null;
     start.setHours(0, 0, 0, 0);
     const weekStart = new Date(start);
@@ -981,28 +1075,45 @@ const handleAddManualCheckIn = async () => {
       String(weekEnd.getMonth() + 1).padStart(2, "0"),
       String(weekEnd.getDate()).padStart(2, "0")
     ].join("-");
-    return entry.dates.filter((d) => d >= startKey && d <= endKey).length;
+    return { startKey, endKey };
   }
 
-  // This week = master for current week; null if no master data for member
+  // All known visit dates for a member: master + local check_ins (unique)
+  function getMergedDatesForMember(member) {
+    const email = (member.email || "").toLowerCase();
+    const set = new Set();
+    const master = masterByEmail[email];
+    if (master?.dates) master.dates.forEach((d) => set.add(d));
+    if (email && localDatesByEmail[email]) {
+      localDatesByEmail[email].forEach((d) => set.add(d));
+    }
+    if (member.id && localDatesByEmail[`id:${member.id}`]) {
+      localDatesByEmail[`id:${member.id}`].forEach((d) => set.add(d));
+    }
+    return Array.from(set).sort();
+  }
+
+  function countDatesInWeek(member, weekNum) {
+    if (!member.startDate) return null;
+    const range = getWeekDateRange(member.startDate, weekNum);
+    if (!range) return null;
+    const dates = getMergedDatesForMember(member);
+    if (!dates.length) return null; // no date-level data → caller may fall back
+    return dates.filter((d) => d >= range.startKey && d <= range.endKey).length;
+  }
+
   function getMasterWeekVisits(member) {
-    const email = (member.email || "").toLowerCase();
-    if (!masterByEmail[email]) return null;
     const week = getOnboardingWeekNumber(member.startDate);
-    return countMasterInWeek(member, week);
+    const counted = countDatesInWeek(member, week);
+    if (counted != null) return counted;
+    // fall back only if we have no date-level data at all
+    return member.weeklyCheckIns?.[week] || 0;
   }
 
-  // Matrix cell: master wins for current week; for past weeks use master if it has visits, else local history
   function getWeekVisitCount(member, weekNum) {
-    const email = (member.email || "").toLowerCase();
-    const local = member.weeklyCheckIns?.[weekNum] || 0;
-    if (!masterByEmail[email]) return local;
-    const masterCount = countMasterInWeek(member, weekNum);
-    if (masterCount == null) return local;
-    const todayWeek = getOnboardingWeekNumber(member.startDate);
-    if (weekNum === todayWeek) return masterCount; // master is authority for current week
-    if (masterCount > 0) return masterCount;
-    return local;
+    const counted = countDatesInWeek(member, weekNum);
+    if (counted != null) return counted;
+    return member.weeklyCheckIns?.[weekNum] || 0;
   }
 
   const pendingMembers = members.filter(m => m.status === "pending");
@@ -1054,9 +1165,24 @@ const handleAddManualCheckIn = async () => {
   let threeMonthCalendars = [];
 
   if (selectedMember) {
-    const totalAllTimeVisits = Object.values(selectedMember.weeklyCheckIns || {}).reduce((a, b) => a + Number(b), 0);
-    const activeWeeks = selectedMember.status === "active" ? Math.max(1, selectedMember.currentWeek || 1) : 0;
-    const avgWeeklyVisitsPerson = activeWeeks > 0 ? (totalAllTimeVisits / activeWeeks).toFixed(1) : "0.0";
+    const weeklySum = Object.values(selectedMember.weeklyCheckIns || {}).reduce((a, b) => a + Number(b), 0);
+    const emailKey = (selectedMember.email || "").toLowerCase();
+    const chipFromLogs = [...(memberCheckIns || [])]
+      .map((c) => c.totalAttendanceCount)
+      .filter((n) => n != null && n !== "")
+      .map((n) => Number(n))
+      .filter((n) => !isNaN(n));
+    const chipFromMaster = masterByEmail[emailKey]?.totalAttendanceCount;
+    const chipTotal = chipFromLogs.length
+      ? Math.max(...chipFromLogs)
+      : (chipFromMaster != null && chipFromMaster !== "" ? Number(chipFromMaster) : null);
+    const totalAllTimeVisits = chipTotal != null && !isNaN(chipTotal) ? chipTotal : weeklySum;
+    const totalCheckinsSource = chipTotal != null && !isNaN(chipTotal) ? "chip" : "weekly";
+    const todayWeek = getOnboardingWeekNumber(selectedMember.startDate);
+    const activeWeeks = selectedMember.status === "active"
+      ? Math.max(1, todayWeek || selectedMember.currentWeek || 1)
+      : 0;
+    const avgWeeklyVisitsPerson = activeWeeks > 0 ? (weeklySum / activeWeeks).toFixed(1) : "0.0";
     const projected12WkTotal = activeWeeks > 0 ? Math.round(Number(avgWeeklyVisitsPerson) * 12) : 0;
 
     const startDateObj = selectedMember.startDate ? new Date(selectedMember.startDate) : null;
@@ -1091,7 +1217,7 @@ const handleAddManualCheckIn = async () => {
     const scansCompleted = (scanObj.scan1 ? 1 : 0) + (scanObj.scan2 ? 1 : 0) + (scanObj.scan3 ? 1 : 0);
     const scanPct = Math.round((scansCompleted / 3) * 100);
 
-    const currentWkVisits = selectedMember.weeklyCheckIns?.[selectedMember.currentWeek] || 0;
+    const currentWkVisits = getWeekVisitCount(selectedMember, activeWeeks);
     const riskInfo = getMemberRiskInfo(currentWkVisits, selectedMember.startDate, selectedMember.status);
 
     const lastCheckInFormatted = selectedMember.lastCheckIn 
@@ -1116,6 +1242,7 @@ const handleAddManualCheckIn = async () => {
 
     personStats = {
       totalAllTimeVisits,
+      totalCheckinsSource,
       activeWeeks,
       nextWeekNum,
       nextWeekStartDateStr,
@@ -1343,7 +1470,15 @@ const handleAddManualCheckIn = async () => {
                           const isCurrent = weekNum === todayWeek;
 
                           let bg = "#e5e7eb";
-                          if (count >= 3) bg = "#22c55e";
+                          let titleExtra = "";
+                          if (isCurrent) {
+                            // Pace-aware: 1 visit early in the week is still on track
+                            const risk = getMemberRiskInfo(count, member.startDate, member.status);
+                            if (risk.level === "low") bg = "#22c55e";
+                            else if (risk.level === "medium") bg = "#f59e0b";
+                            else if (risk.level === "high") bg = "#ef4444";
+                            titleExtra = ` · ${risk.label}`;
+                          } else if (count >= 3) bg = "#22c55e";
                           else if (count === 2) bg = "#f59e0b";
                           else if (count === 1) bg = "#ef4444";
                           else if (weekNum < todayWeek && count === 0) bg = "#9ca3af";
@@ -1351,7 +1486,7 @@ const handleAddManualCheckIn = async () => {
                           return (
                             <div 
                               key={weekNum} 
-                              title={`Week ${weekNum}: ${count} visits`}
+                              title={`Week ${weekNum}: ${count} visits${titleExtra}`}
                               style={{
                                 ...styles.matrixBox,
                                 backgroundColor: bg,

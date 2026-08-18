@@ -1,14 +1,10 @@
 import React from "react";
 import { stripHtml } from "../utils/helpers";
 
-import InBodyScans from "./MemberDetail/InBodyScans";
 import ProgressBar from "./MemberDetail/ProgressBar";
 import StatsRow from "./MemberDetail/StatsRow";
 import MemberHeader from "./MemberDetail/MemberHeader";
-import AttendanceCalendar from "./MemberDetail/AttendanceCalendar";
 import MemberTabs from "./MemberDetail/MemberTabs";
-import EditMemberForm from "./MemberDetail/EditMemberForm";
-import MemberFooter from "./MemberDetail/MemberFooter";
 
 export default function MemberDetailModal(props) {
   const {
@@ -60,6 +56,7 @@ export default function MemberDetailModal(props) {
         <div style={styles.modalOverlay} onClick={() => onClose}>
           <div style={styles.personViewModal} onClick={(e) => e.stopPropagation()}>
             
+            <div style={{ flexShrink: 0 }}>
             <MemberHeader
   selectedMember={selectedMember}
   riskInfo={personStats.riskInfo}
@@ -69,36 +66,25 @@ export default function MemberDetailModal(props) {
             <ProgressBar
   progressPct={personStats.onboardingProgressPct}
   status={selectedMember.status}
-  currentWeek={selectedMember.currentWeek}
+  currentWeek={personStats.activeWeeks || selectedMember.currentWeek}
 />
 
-            {/* Person View Stats Row */}
             <StatsRow 
   personStats={personStats} 
   status={selectedMember.status} 
 />
+            </div>
 
-            {/* 3-Month Calendar */}
-            <AttendanceCalendar
-  selectedMember={selectedMember}
-  threeMonthCalendars={threeMonthCalendars}
-  checkInDatesSet={checkInDatesSet}
-/>
-
-            {/* InBody Scans */}
-         <InBodyScans
-  selectedMember={selectedMember}
-  scansCompleted={personStats.scansCompleted}
-  scanPct={personStats.scanPct}
-  onToggleScan={onToggleScan}
-/>
-
-            {/* --- GHL & LOGS MULTI-TAB SECTION --- */}
            <MemberTabs
   activeTab={activeTab}
   setActiveTab={setActiveTab}
   selectedMember={selectedMember}
   memberCheckIns={memberCheckIns}
+  threeMonthCalendars={threeMonthCalendars}
+  checkInDatesSet={checkInDatesSet}
+  scansCompleted={personStats.scansCompleted}
+  scanPct={personStats.scanPct}
+  onToggleScan={onToggleScan}
   loadingHistory={loadingHistory}
   ghlData={ghlData}
   loadingGhl={loadingGhl}
@@ -118,20 +104,11 @@ export default function MemberDetailModal(props) {
   setSmsFilePreview={setSmsFilePreview}
   sendAsInternal={sendAsInternal}
   setSendAsInternal={setSendAsInternal}
-/>
-
-            {/* Edit Settings */}
-           <EditMemberForm
   isEditing={isEditing}
   setIsEditing={setIsEditing}
   editFormData={editFormData}
   setEditFormData={setEditFormData}
-  selectedMember={selectedMember}
   onSaveEdit={onSaveEdit}
-/>
-
-<MemberFooter
-  memberId={selectedMember.id}
   onDeleteMember={onDeleteMember}
 />
 
@@ -149,14 +126,18 @@ const styles = {
   // Person View Modal Styles
   modalOverlay: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(15, 23, 42, 0.6)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000 },
   personViewModal: {
-  backgroundColor: "#fff",
-  borderRadius: "16px",
-  width: "100%",
-  maxWidth: "960px",        // a bit wider too
-  maxHeight: "94vh",        // almost full screen height
-  overflowY: "auto",
-  boxShadow: "0 25px 50px -12px rgb(0 0 0 / 0.4)",
-},
+    backgroundColor: "#fff",
+    borderRadius: "16px",
+    width: "100%",
+    maxWidth: "960px",
+    height: "94vh",
+    maxHeight: "94vh",
+    overflow: "hidden",
+    display: "flex",
+    flexDirection: "column",
+    boxShadow: "0 25px 50px -12px rgb(0 0 0 / 0.4)",
+    padding: "16px",
+  },
   personHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", paddingBottom: "12px", borderBottom: "1px solid #e2e8f0" },
   closeBtn: { background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "#64748b" },
   progressCard: { backgroundColor: "#f8fafc", padding: "12px 16px", borderRadius: "8px", border: "1px solid #e2e8f0" },
