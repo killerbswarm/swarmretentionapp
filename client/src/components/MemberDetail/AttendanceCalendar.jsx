@@ -1,4 +1,5 @@
 import React from "react";
+import { localNoonFromStart } from "../../utils/helpers";
 
 function formatClassTime(raw) {
   if (raw == null || raw === "") return "";
@@ -147,12 +148,13 @@ export default function AttendanceCalendar({
 
                   let weekBadgeLabel = null;
                   if (selectedMember.startDate) {
-                    const sObj = new Date(selectedMember.startDate);
-                    const startLocal = new Date(sObj.getFullYear(), sObj.getMonth(), sObj.getDate());
-                    const cellLocal = new Date(mObj.year, mObj.month, dayNum);
-                    const diffDays = Math.round((cellLocal - startLocal) / (1000 * 60 * 60 * 24));
-                    if (diffDays >= 0 && diffDays < 84 && diffDays % 7 === 0) {
-                      weekBadgeLabel = `W${Math.floor(diffDays / 7) + 1}`;
+                    const startLocal = localNoonFromStart(selectedMember.startDate);
+                    if (startLocal) {
+                      const cellLocal = new Date(mObj.year, mObj.month, dayNum, 12, 0, 0);
+                      const diffDays = Math.round((cellLocal - startLocal) / (1000 * 60 * 60 * 24));
+                      if (diffDays >= 0 && diffDays < 84 && diffDays % 7 === 0) {
+                        weekBadgeLabel = `W${Math.floor(diffDays / 7) + 1}`;
+                      }
                     }
                   }
 

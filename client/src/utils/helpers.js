@@ -17,12 +17,49 @@ export function stripHtml(htmlStr) {
 /**
  * Calculates current onboarding week (1-12) based on Start Date
  */
+export function localNoonFromStart(startDateStr) {
+  if (!startDateStr) return null;
+  if (startDateStr.toDate) startDateStr = startDateStr.toDate();
+  else if (startDateStr.seconds) startDateStr = new Date(startDateStr.seconds * 1000);
+  if (startDateStr instanceof Date && !isNaN(startDateStr.getTime())) {
+    return new Date(startDateStr.getFullYear(), startDateStr.getMonth(), startDateStr.getDate(), 12, 0, 0);
+  }
+  const s = String(startDateStr);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0);
+}
+
+function ymdParts(input) {
+  if (!input) return null;
+  if (typeof input === "string") {
+    const m = input.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return { y: Number(m[1]), mo: Number(m[2]), d: Number(m[3]) };
+  }
+  const noon = localNoonFromStart(input);
+  if (!noon) return null;
+  return { y: noon.getFullYear(), mo: noon.getMonth() + 1, d: noon.getDate() };
+}
+
+export function localDaysSinceStart(startDateStr) {
+  const start = ymdParts(startDateStr);
+  if (!start) return 0;
+  const now = new Date();
+  const today = { y: now.getFullYear(), mo: now.getMonth() + 1, d: now.getDate() };
+  return Math.max(
+    0,
+    Math.round(
+      (Date.UTC(today.y, today.mo - 1, today.d) - Date.UTC(start.y, start.mo - 1, start.d)) /
+        (1000 * 60 * 60 * 24)
+    )
+  );
+}
+
 export function calculateWeekFromDate(startDateStr) {
   if (!startDateStr) return 1;
-  const start = new Date(startDateStr);
-  const now = new Date();
-  const diffInDays = Math.floor((now - start) / (1000 * 60 * 60 * 24));
-  let week = Math.floor(diffInDays / 7) + 1;
+  const week = Math.floor(localDaysSinceStart(startDateStr) / 7) + 1;
   if (week < 1) return 1;
   if (week > 12) return 12;
   return week;
@@ -44,10 +81,7 @@ export function getMemberRiskInfo(checkIns, startDateStr, status) {
 
   let daysIntoWeek = 1;
   if (startDateStr) {
-    const start = new Date(startDateStr);
-    const now = new Date();
-    const diffDays = Math.max(0, Math.floor((now - start) / (1000 * 60 * 60 * 24)));
-    daysIntoWeek = (diffDays % 7) + 1;
+    daysIntoWeek = (localDaysSinceStart(startDateStr) % 7) + 1;
   }
 
   if (checkIns >= 3) {

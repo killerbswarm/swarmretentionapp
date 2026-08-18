@@ -22,7 +22,9 @@ import { db, auth } from "./firebase";
 import { 
   stripHtml, 
   calculateWeekFromDate, 
-  getMemberRiskInfo, 
+  getMemberRiskInfo,
+  localNoonFromStart,
+  localDaysSinceStart, 
   generateThreeMonthCalendar 
 } from "./utils/helpers";
 
@@ -1047,20 +1049,13 @@ const handleAddManualCheckIn = async () => {
 
   function getOnboardingWeekNumber(startDateStr) {
     if (!startDateStr) return 1;
-    const start = new Date(startDateStr);
-    if (isNaN(start)) return 1;
-    start.setHours(0, 0, 0, 0);
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-    const diffDays = Math.floor((now - start) / (1000 * 60 * 60 * 24));
-    if (diffDays < 0) return 1;
+    const diffDays = localDaysSinceStart(startDateStr);
     return Math.min(12, Math.max(1, Math.floor(diffDays / 7) + 1));
   }
 
   function getWeekDateRange(startDateStr, weekNum) {
-    const start = new Date(startDateStr);
-    if (isNaN(start)) return null;
-    start.setHours(0, 0, 0, 0);
+    const start = localNoonFromStart(startDateStr);
+    if (!start) return null;
     const weekStart = new Date(start);
     weekStart.setDate(weekStart.getDate() + (weekNum - 1) * 7);
     const weekEnd = new Date(weekStart);
@@ -1185,28 +1180,21 @@ const handleAddManualCheckIn = async () => {
     const avgWeeklyVisitsPerson = activeWeeks > 0 ? (weeklySum / activeWeeks).toFixed(1) : "0.0";
     const projected12WkTotal = activeWeeks > 0 ? Math.round(Number(avgWeeklyVisitsPerson) * 12) : 0;
 
-    const startDateObj = selectedMember.startDate ? new Date(selectedMember.startDate) : null;
-    const nowObj = new Date();
-    const daysActive = startDateObj ? Math.max(0, Math.floor((nowObj - startDateObj) / (1000 * 60 * 60 * 24))) : 0;
+    const startDateObj = localNoonFromStart(selectedMember.startDate);
+    const daysActive = selectedMember.startDate ? localDaysSinceStart(selectedMember.startDate) : 0;
     const onboardingProgressPct = selectedMember.status === "pending" ? 0 : Math.min(100, Math.round((activeWeeks / 12) * 100));
 
-    // NEXT WEEK ADVANCEMENT CALCULATIONS
     let nextWeekNum = activeWeeks + 1;
     let nextWeekStartDateStr = "N/A";
     let daysUntilNextWeek = 0;
 
     if (startDateObj && selectedMember.status === "active") {
       if (activeWeeks < 12) {
-        const nextWeekObj = new Date(startDateObj.getTime() + activeWeeks * 7 * 24 * 60 * 60 * 1000);
+        const nextWeekObj = new Date(startDateObj);
+        nextWeekObj.setDate(nextWeekObj.getDate() + todayWeek * 7);
         nextWeekStartDateStr = nextWeekObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-        
-        const todayMid = new Date();
-        todayMid.setHours(0,0,0,0);
-        const nextWeekMid = new Date(nextWeekObj);
-        nextWeekMid.setHours(0,0,0,0);
-        
-        const diffMs = nextWeekMid - todayMid;
-        daysUntilNextWeek = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+        daysUntilNextWeek = Math.max(0, 7 - ((daysActive % 7) || 0));
+        if (daysActive % 7 === 0) daysUntilNextWeek = 7;
       } else {
         nextWeekStartDateStr = "Completed 12 Wks";
         nextWeekNum = 12;
