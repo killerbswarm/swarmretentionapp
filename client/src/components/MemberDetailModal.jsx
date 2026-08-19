@@ -1,6 +1,4 @@
 import React from "react";
-import { stripHtml } from "../utils/helpers";
-
 import ProgressBar from "./MemberDetail/ProgressBar";
 import StatsRow from "./MemberDetail/StatsRow";
 import MemberHeader from "./MemberDetail/MemberHeader";
@@ -46,76 +44,62 @@ export default function MemberDetailModal(props) {
 
   if (!selectedMember || !personStats) return null;
 
-  const todayKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
-
   return (
     <div style={styles.modalOverlay} onClick={onClose}>
       <div style={styles.personViewModal} onClick={(e) => e.stopPropagation()}>
-        
-         {selectedMember && personStats && (
-        <div style={styles.modalOverlay} onClick={() => onClose}>
-          <div style={styles.personViewModal} onClick={(e) => e.stopPropagation()}>
-            
-            <div style={{ flexShrink: 0 }}>
-            <MemberHeader
-  selectedMember={selectedMember}
-  riskInfo={personStats.riskInfo}
-  onClose={onClose}
-/>
-
-            <ProgressBar
-  progressPct={personStats.onboardingProgressPct}
-  status={selectedMember.status}
-  currentWeek={personStats.activeWeeks || selectedMember.currentWeek}
-/>
-
-            <StatsRow 
-  personStats={personStats} 
-  status={selectedMember.status} 
-/>
-            </div>
-
-           <MemberTabs
-  activeTab={activeTab}
-  setActiveTab={setActiveTab}
-  selectedMember={selectedMember}
-  memberCheckIns={memberCheckIns}
-  threeMonthCalendars={threeMonthCalendars}
-  checkInDatesSet={checkInDatesSet}
-  scansCompleted={personStats.scansCompleted}
-  scanPct={personStats.scanPct}
-  onToggleScan={onToggleScan}
-  loadingHistory={loadingHistory}
-  ghlData={ghlData}
-  loadingGhl={loadingGhl}
-  newNoteText={newNoteText}
-  setNewNoteText={setNewNoteText}
-  addingNote={addingNote}
-  newSmsText={newSmsText}
-  setNewSmsText={setNewSmsText}
-  sendingSms={sendingSms}
-  onManualCheckIn={onManualCheckIn}
-  onDeleteLog={onDeleteLog}
-  onAddNote={onAddNote}
-  onSendSms={onSendSms}
-  smsFile={smsFile}
-  setSmsFile={setSmsFile}
-  smsFilePreview={smsFilePreview}
-  setSmsFilePreview={setSmsFilePreview}
-  sendAsInternal={sendAsInternal}
-  setSendAsInternal={setSendAsInternal}
-  isEditing={isEditing}
-  setIsEditing={setIsEditing}
-  editFormData={editFormData}
-  setEditFormData={setEditFormData}
-  onSaveEdit={onSaveEdit}
-  onDeleteMember={onDeleteMember}
-/>
-
-          </div>
+        <div style={{ flexShrink: 0 }}>
+          <MemberHeader
+            selectedMember={selectedMember}
+            riskInfo={personStats.riskInfo}
+            onClose={onClose}
+          />
+          <ProgressBar
+            progressPct={personStats.onboardingProgressPct}
+            status={selectedMember.status}
+            currentWeek={personStats.activeWeeks || selectedMember.currentWeek}
+          />
+          <StatsRow
+            personStats={personStats}
+            status={selectedMember.status}
+          />
         </div>
-      )}
 
+        <MemberTabs
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          selectedMember={selectedMember}
+          memberCheckIns={memberCheckIns}
+          threeMonthCalendars={threeMonthCalendars}
+          checkInDatesSet={checkInDatesSet}
+          scansCompleted={personStats.scansCompleted}
+          scanPct={personStats.scanPct}
+          onToggleScan={onToggleScan}
+          loadingHistory={loadingHistory}
+          ghlData={ghlData}
+          loadingGhl={loadingGhl}
+          newNoteText={newNoteText}
+          setNewNoteText={setNewNoteText}
+          addingNote={addingNote}
+          newSmsText={newSmsText}
+          setNewSmsText={setNewSmsText}
+          sendingSms={sendingSms}
+          onManualCheckIn={onManualCheckIn}
+          onDeleteLog={onDeleteLog}
+          onAddNote={onAddNote}
+          onSendSms={onSendSms}
+          smsFile={smsFile}
+          setSmsFile={setSmsFile}
+          smsFilePreview={smsFilePreview}
+          setSmsFilePreview={setSmsFilePreview}
+          sendAsInternal={sendAsInternal}
+          setSendAsInternal={setSendAsInternal}
+          isEditing={isEditing}
+          setIsEditing={setIsEditing}
+          editFormData={editFormData}
+          setEditFormData={setEditFormData}
+          onSaveEdit={onSaveEdit}
+          onDeleteMember={onDeleteMember}
+        />
       </div>
     </div>
   );

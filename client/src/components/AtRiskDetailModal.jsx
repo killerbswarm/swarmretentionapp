@@ -15,6 +15,8 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
   const [sendAsInternal, setSendAsInternal] = useState(false);
   const [reachOutNote, setReachOutNote] = useState("");
   const [savingReachOut, setSavingReachOut] = useState(false);
+  const [newNoteText, setNewNoteText] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
 
   const messagesEndRef = useRef(null);
 
@@ -98,6 +100,102 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
       notes: refreshData.notes || [],
       contactId: refreshData.contactId || ghlData.contactId,
     });
+  };
+
+  const dayKey = (iso) => {
+    const d = iso ? new Date(iso) : new Date();
+    if (isNaN(d.getTime())) return "";
+    return [
+      d.getFullYear(),
+      String(d.getMonth() + 1).padStart(2, "0"),
+      String(d.getDate()).padStart(2, "0")
+    ].join("-");
+  };
+
+  const hasReachOutToday = () => {
+    const today = dayKey();
+    return (member.reachOuts || []).some((r) => dayKey(r.at) === today);
+  };
+
+  const saveReachOuts = async (next) => {
+    await setDoc(
+      doc(db, "atRiskMembers", member.id),
+      {
+        reachOuts: next,
+        lastReachOutAt: next.length ? next[next.length - 1].at : null,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  };
+
+  const saveStaffNotes = async (next) => {
+    await setDoc(
+      doc(db, "atRiskMembers", member.id),
+      { staffNotes: next, updatedAt: new Date().toISOString() },
+      { merge: true }
+    );
+  };
+
+  const handleAddStaffNote = async () => {
+    if (!member?.id || !newNoteText.trim()) return;
+    setSavingNote(true);
+    try {
+      const existing = Array.isArray(member.staffNotes) ? member.staffNotes : [];
+      await saveStaffNotes([
+        ...existing,
+        { id: Date.now().toString(), text: newNoteText.trim(), at: new Date().toISOString() },
+      ]);
+      setNewNoteText("");
+    } catch (err) {
+      alert("Failed to add note: " + (err?.message || String(err)));
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
+  const handleEditStaffNote = async (note) => {
+    const next = window.prompt("Edit note", note.text || "");
+    if (next == null) return;
+    const existing = Array.isArray(member.staffNotes) ? member.staffNotes : [];
+    await saveStaffNotes(
+      existing.map((n) =>
+        n.id === note.id ? { ...n, text: next.trim(), updatedAt: new Date().toISOString() } : n
+      )
+    );
+  };
+
+  const handleDeleteStaffNote = async (note) => {
+    if (!window.confirm("Delete this note?")) return;
+    const existing = Array.isArray(member.staffNotes) ? member.staffNotes : [];
+    await saveStaffNotes(existing.filter((n) => n.id !== note.id));
+  };
+
+  const handleEditReachOut = async (idx) => {
+    const current = (member.reachOuts || [])[idx];
+    if (!current) return;
+    const next = window.prompt("Edit reach-out memo", current.note || "");
+    if (next == null) return;
+    const list = [...(member.reachOuts || [])];
+    list[idx] = { ...current, note: next.trim(), updatedAt: new Date().toISOString() };
+    await saveReachOuts(list);
+  };
+
+  const handleDeleteReachOut = async (idx) => {
+    if (!window.confirm("Delete this reach-out?")) return;
+    const list = (member.reachOuts || []).filter((_, i) => i !== idx);
+    await saveReachOuts(list);
+  };
+
+  const maybeLogSmsReachOut = async (text) => {
+    if (!member?.id || hasReachOutToday()) return;
+    const existing = Array.isArray(member.reachOuts) ? member.reachOuts : [];
+    const entry = {
+      at: new Date().toISOString(),
+      note: (text || "").trim() || "SMS",
+      source: "sms",
+    };
+    await saveReachOuts([...existing, entry]);
   };
 
   const handleLogReachOut = async () => {
@@ -191,9 +289,11 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
       );
       const data = await res.json();
       if (res.ok && data.success) {
+        const sent = newSmsText.trim();
         setNewSmsText("");
         setSmsFile(null);
         setSmsFilePreview(null);
+        await maybeLogSmsReachOut(sent);
         await refreshGhl();
       } else {
         alert(data.error || "Failed to send SMS");
@@ -251,48 +351,61 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
             style={activeTab === "messages" ? styles.tabActive : styles.tab}
             onClick={() => setActiveTab("messages")}
           >
-            💬 SMS ({ghlData.messages.length})
+            💬 SMS
           </button>
           <button
             style={activeTab === "notes" ? styles.tabActive : styles.tab}
             onClick={() => setActiveTab("notes")}
           >
-            📝 Notes ({ghlData.notes.length})
+            📝 Notes
           </button>
           <button
             style={activeTab === "reachouts" ? styles.tabActive : styles.tab}
             onClick={() => setActiveTab("reachouts")}
           >
-            📤 Reach-outs ({(member.reachOuts || []).length})
+            📤 Reach-outs
           </button>
         </div>
 
         {/* SCROLLABLE CONTENT ONLY */}
-        <div style={styles.scrollBody}>
+        <div style={{
+          ...styles.scrollBody,
+          overflowY: activeTab === "messages" ? "hidden" : "auto",
+          display: activeTab === "messages" ? "flex" : undefined,
+          flexDirection: activeTab === "messages" ? "column" : undefined,
+        }}>
           {loadingGhl ? (
-            <p style={{ color: "#64748b" }}>Loading GHL data...</p>
+            <p style={{ color: "#64748b" }}>Loading...</p>
           ) : activeTab === "reachouts" ? (
             <div>
               {(member.reachOuts || []).length === 0 ? (
                 <p style={{ color: "#94a3b8", fontSize: 13 }}>No reach-outs logged yet</p>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
-                  {[...(member.reachOuts || [])]
-                    .slice()
-                    .reverse()
-                    .map((r, i) => (
-                      <div key={(r.at || "") + i} style={styles.reachOutItem}>
-                        <strong>
-                          {new Date(r.at).toLocaleString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            hour: "numeric",
-                            minute: "2-digit",
-                          })}
-                        </strong>
-                        {r.note ? ` — ${r.note}` : ""}
+                  {[...(member.reachOuts || [])].map((r, idx, arr) => {
+                    const rIdx = arr.length - 1 - idx;
+                    const item = arr[rIdx];
+                    return (
+                      <div key={(item.at || "") + rIdx} style={{ ...styles.reachOutItem, display: "flex", justifyContent: "space-between", gap: 8 }}>
+                        <div>
+                          <strong>
+                            {new Date(item.at).toLocaleString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })}
+                          </strong>
+                          {item.source === "sms" ? " · SMS" : ""}
+                          {item.note ? ` — ${item.note}` : ""}
+                        </div>
+                        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                          <button type="button" style={styles.smallBtn} onClick={() => handleEditReachOut(rIdx)}>Edit</button>
+                          <button type="button" style={styles.smallDanger} onClick={() => handleDeleteReachOut(rIdx)}>Delete</button>
+                        </div>
                       </div>
-                    ))}
+                    );
+                  })}
                 </div>
               )}
               <input
@@ -302,10 +415,15 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
                 onChange={(e) => setReachOutNote(e.target.value)}
                 style={styles.input}
               />
+              {hasReachOutToday() && (
+                <p style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>
+                  A reach-out is already logged for today. Another SMS today won’t add a second one.
+                </p>
+              )}
               <button
                 type="button"
                 onClick={handleLogReachOut}
-                disabled={savingReachOut}
+                disabled={savingReachOut || hasReachOutToday()}
                 style={{
                   ...styles.primaryBtn,
                   opacity: savingReachOut ? 0.6 : 1,
@@ -316,11 +434,11 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
               </button>
             </div>
           ) : activeTab === "messages" ? (
-            <div>
+            <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, height: "100%" }}>
               {(ghlData.messages || []).length === 0 ? (
                 <p style={{ color: "#94a3b8", fontStyle: "italic" }}>No SMS history found</p>
               ) : (
-                <div style={styles.messageList}>
+                <div style={{ ...styles.messageList, flex: 1, minHeight: 0, overflowY: "auto" }}>
                   {[...(ghlData.messages || [])]
                     .sort(
                       (a, b) =>
@@ -416,10 +534,10 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
               {ghlData.contactId && (
                 <form onSubmit={handleSendSms} style={styles.composeForm}>
                   <textarea
-                    placeholder="Type text message to send via GHL..."
+                    placeholder="Type a message..."
                     value={newSmsText || ""}
                     onChange={(e) => setNewSmsText(e.target.value)}
-                    rows={3}
+                    rows={6}
                     style={styles.textarea}
                   />
                   {smsFilePreview && (
@@ -482,22 +600,50 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
             </div>
           ) : (
             <div>
-              {(ghlData.notes || []).length === 0 ? (
-                <p style={{ color: "#94a3b8", fontStyle: "italic" }}>No staff notes found</p>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {ghlData.notes.map((note) => (
-                    <div key={note.id || Math.random()} style={styles.noteCard}>
-                      <div style={{ whiteSpace: "pre-wrap" }}>
-                        {stripHtml(note.body || note.note || "")}
-                      </div>
-                      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6 }}>
-                        {new Date(note.dateAdded || note.createdAt).toLocaleString()}
-                      </div>
+              {(member.staffNotes || []).length === 0 && (ghlData.notes || []).length === 0 ? (
+                <p style={{ color: "#94a3b8", fontStyle: "italic" }}>No staff notes yet</p>
+              ) : null}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
+                {(member.staffNotes || []).slice().reverse().map((note) => (
+                  <div key={note.id} style={styles.noteCard}>
+                    <div style={{ whiteSpace: "pre-wrap" }}>{note.text}</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
+                      <span style={{ fontSize: 11, color: "#94a3b8" }}>
+                        {note.at ? new Date(note.at).toLocaleString() : ""}
+                      </span>
+                      <span style={{ display: "flex", gap: 6 }}>
+                        <button type="button" style={styles.smallBtn} onClick={() => handleEditStaffNote(note)}>Edit</button>
+                        <button type="button" style={styles.smallDanger} onClick={() => handleDeleteStaffNote(note)}>Delete</button>
+                      </span>
                     </div>
-                  ))}
-                </div>
-              )}
+                  </div>
+                ))}
+                {(ghlData.notes || []).map((note) => (
+                  <div key={note.id || note.dateAdded} style={{ ...styles.noteCard, opacity: 0.85 }}>
+                    <div style={{ whiteSpace: "pre-wrap" }}>
+                      {stripHtml(note.body || note.note || "")}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6 }}>
+                      {new Date(note.dateAdded || note.createdAt).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <textarea
+                placeholder="Add a staff note..."
+                value={newNoteText}
+                onChange={(e) => setNewNoteText(e.target.value)}
+                rows={3}
+                style={styles.textarea}
+              />
+              <button
+                type="button"
+                onClick={handleAddStaffNote}
+                disabled={savingNote || !newNoteText.trim()}
+                style={{ ...styles.primaryBtn, marginTop: 8, opacity: savingNote || !newNoteText.trim() ? 0.6 : 1 }}
+              >
+                {savingNote ? "Saving..." : "+ Add note"}
+              </button>
             </div>
           )}
         </div>
@@ -535,6 +681,7 @@ const styles = {
     borderRadius: 16,
     width: "100%",
     maxWidth: 640,
+    height: "90vh",
     maxHeight: "90vh",
     display: "flex",
     flexDirection: "column",
@@ -582,13 +729,16 @@ const styles = {
   },
   tabBar: {
     display: "flex",
-    gap: 8,
-    padding: "8px 24px",
+    gap: 6,
+    padding: "8px 16px",
     flexShrink: 0,
     borderBottom: "1px solid #e2e8f0",
+    flexWrap: "nowrap",
   },
   tab: {
-    padding: "6px 14px",
+    flex: 1,
+    padding: "6px 8px",
+    whiteSpace: "nowrap",
     borderRadius: 6,
     border: "1px solid #cbd5e1",
     backgroundColor: "#f8fafc",
@@ -596,7 +746,9 @@ const styles = {
     cursor: "pointer",
   },
   tabActive: {
-    padding: "6px 14px",
+    flex: 1,
+    padding: "6px 8px",
+    whiteSpace: "nowrap",
     borderRadius: 6,
     border: "none",
     backgroundColor: "#2563eb",
@@ -646,6 +798,26 @@ const styles = {
     padding: "10px 12px",
     fontSize: 13,
   },
+  smallBtn: {
+    border: "1px solid #cbd5e1",
+    background: "#f8fafc",
+    color: "#334155",
+    borderRadius: 6,
+    padding: "4px 8px",
+    fontSize: 11,
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  smallDanger: {
+    border: "none",
+    background: "#fef2f2",
+    color: "#dc2626",
+    borderRadius: 6,
+    padding: "4px 8px",
+    fontSize: 11,
+    fontWeight: 700,
+    cursor: "pointer",
+  },
   reachOutItem: {
     fontSize: 13,
     padding: "8px 12px",
@@ -675,7 +847,9 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     gap: 10,
-    marginTop: 14,
+    marginTop: "auto",
+    paddingTop: 12,
+    flexShrink: 0,
   },
   textarea: {
     width: "100%",
@@ -684,6 +858,7 @@ const styles = {
     border: "1px solid #cbd5e1",
     fontSize: 14,
     resize: "vertical",
+    minHeight: 120,
     fontFamily: "inherit",
     boxSizing: "border-box",
   },

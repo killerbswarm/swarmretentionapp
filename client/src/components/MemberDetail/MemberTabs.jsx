@@ -58,12 +58,6 @@ export default function MemberTabs({
           🧍 Scans
         </button>
         <button
-          style={activeTab === "logs" ? styles.tabBtnActive : styles.tabBtn}
-          onClick={() => setActiveTab("logs")}
-        >
-          📜 Logs
-        </button>
-        <button
           style={activeTab === "messages" ? styles.tabBtnActive : styles.tabBtn}
           onClick={() => setActiveTab("messages")}
         >
@@ -79,7 +73,7 @@ export default function MemberTabs({
           style={activeTab === "appts" ? styles.tabBtnActive : styles.tabBtn}
           onClick={() => setActiveTab("appts")}
         >
-          🗓️ Appointments
+          🗓️ Appts
         </button>
         <button
           style={activeTab === "settings" ? styles.tabBtnActive : styles.tabBtn}
@@ -91,9 +85,9 @@ export default function MemberTabs({
 
       <div style={{
         ...styles.tabBody,
-        overflowY: (activeTab === "messages" || activeTab === "logs") ? "hidden" : "auto",
-        display: (activeTab === "messages" || activeTab === "logs") ? "flex" : undefined,
-        flexDirection: (activeTab === "messages" || activeTab === "logs") ? "column" : undefined,
+        overflowY: (activeTab === "calendar" || activeTab === "messages") ? "hidden" : "auto",
+        display: (activeTab === "messages") ? "flex" : undefined,
+        flexDirection: (activeTab === "messages") ? "column" : undefined,
       }}>
       {activeTab === "calendar" && (
         <AttendanceCalendar
@@ -101,6 +95,8 @@ export default function MemberTabs({
           threeMonthCalendars={threeMonthCalendars}
           checkInDatesSet={checkInDatesSet}
           memberCheckIns={memberCheckIns}
+          onAddCheckIn={onManualCheckIn}
+          onDeleteLog={onDeleteLog}
         />
       )}
 
@@ -113,87 +109,16 @@ export default function MemberTabs({
         />
       )}
 
-      {/* ===== CHECK-IN LOGS ===== */}
-      {activeTab === "logs" && (
-        <div style={styles.fillPanel}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-            <span style={{ fontSize: "12px", color: "#64748b" }}>
-              Attendance from Chalk It Pro and manual logs
-            </span>
-            {selectedMember.status === "active" && (
-              <button style={styles.manualCheckInBtn} onClick={onManualCheckIn}>
-                + Quick Log Check-In
-              </button>
-            )}
-          </div>
-
-          {loadingHistory ? (
-            <p style={{ color: "#6b7280", fontSize: "13px" }}>Loading logs...</p>
-          ) : memberCheckIns.length === 0 ? (
-            <p style={{ color: "#9ca3af", fontStyle: "italic", fontSize: "13px" }}>
-              No check-ins logged yet.
-              <button
-  onClick={onManualCheckIn}
-  style={{
-    backgroundColor: "#16a34a",
-    color: "#fff",
-    border: "none",
-    padding: "10px 16px",
-    borderRadius: "8px",
-    fontWeight: "600",
-    cursor: "pointer",
-    marginTop: "12px",
-  }}
->
-  {selectedMember?.status === "pending"
-    ? "✓ Log First Check-In (Start 12-Week)"
-    : "+ Add Manual Check-In"}
-</button>
-            </p>
-            
-          ) : (
-            <div style={styles.historyLogList}>
-              {memberCheckIns.map((log) => (
-                <div key={log.id} style={styles.historyLogItem}>
-                  <div>
-                    <div style={{ fontWeight: "600", fontSize: "13px" }}>
-                      {log.timestamp
-                        ? new Date(log.timestamp).toLocaleString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            hour: "numeric",
-                            minute: "2-digit",
-                          })
-                        : "Unknown date"}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <span style={styles.weekPill}>Week {log.weekNumber || 1}</span>
-                    <button
-                      style={styles.deleteLogBtn}
-                      onClick={() => onDeleteLog(log)}
-                      title="Delete this check-in entry"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* ===== TAB 2: SMS ===== */}
       {activeTab === "messages" && (
         <div style={styles.smsPanel}>
           {loadingGhl ? (
             <p style={{ fontSize: "13px", color: "#64748b" }}>
-              Loading SMS conversation thread from GoHighLevel...
+              Loading messages...
             </p>
           ) : ghlData.messages.length === 0 ? (
             <p style={{ color: "#9ca3af", fontStyle: "italic", fontSize: "13px" }}>
-              No SMS conversation history found in GHL for this email.
+              No SMS conversation found for this email.
             </p>
           ) : (
             <div style={styles.smsThread}>
@@ -302,7 +227,7 @@ export default function MemberTabs({
     style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "12px" }}
   >
     <textarea
-      placeholder="Type text message to send via GHL..."
+      placeholder="Type a message..."
       value={newSmsText}
       onChange={(e) => setNewSmsText(e.target.value)}
       rows={3}
@@ -411,7 +336,7 @@ export default function MemberTabs({
             <p style={{ fontSize: "13px", color: "#64748b" }}>Loading staff notes...</p>
           ) : ghlData.notes.length === 0 ? (
             <p style={{ color: "#9ca3af", fontStyle: "italic", fontSize: "13px" }}>
-              No staff notes found in GHL.
+              No staff notes found.
             </p>
           ) : (
             <div style={{ maxHeight: "220px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
@@ -471,7 +396,7 @@ export default function MemberTabs({
             <p style={{ fontSize: "13px", color: "#64748b" }}>Loading appointments...</p>
           ) : ghlData.appointments.length === 0 ? (
             <p style={{ color: "#9ca3af", fontStyle: "italic", fontSize: "13px" }}>
-              No appointments found in GHL for this contact.
+              No appointments found for this contact.
             </p>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -533,9 +458,9 @@ const styles = {
   tabHeaderBar: {
     display: "flex",
     gap: "6px",
-    marginBottom: "14px",
-    flexWrap: "nowrap",
-    overflowX: "auto",
+    marginBottom: "10px",
+    flexWrap: "wrap",
+    overflow: "visible",
     flexShrink: 0,
   },
   tabBody: {
@@ -564,7 +489,7 @@ const styles = {
     marginBottom: "12px",
   },
   tabBtn: {
-    padding: "6px 12px",
+    padding: "6px 10px",
     fontSize: "12px",
     borderRadius: "6px",
     border: "1px solid #cbd5e1",

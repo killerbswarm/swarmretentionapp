@@ -105,6 +105,7 @@ export default function App() {
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
   const [showAddModal, setShowAddModal] = useState(false);
   const [atRiskMembers, setAtRiskMembers] = useState([]);
   const [mainTab, setMainTab] = useState("twelve_week"); // "twelve_week" | "at_risk"
@@ -217,6 +218,13 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
       setAuthChecking(false);
     });
     return () => unsubscribeAuth();
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   // Password Login Handler
@@ -753,17 +761,23 @@ if (smsFile) {
   };
 
   // Add a manual check-in log inside Person View
-const handleAddManualCheckIn = async () => {
+const handleAddManualCheckIn = async (dateKey) => {
   if (!selectedMember) return;
+  if (dateKey && typeof dateKey !== "string") dateKey = null;
 
   const now = new Date();
+  let when = now;
+  if (dateKey && /^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    const [y, mo, d] = dateKey.split("-").map(Number);
+    when = new Date(y, mo - 1, d, 12, 0, 0);
+  }
   const memberRef = doc(db, "members", selectedMember.id);
 
   try {
     // First check-in for a pending member (same as webhook)
     if (selectedMember.status === "pending") {
       const memberData = {
-        startDate: now.toISOString(),
+        startDate: when.toISOString(),
         currentWeek: 1,
         weekOverride: null,
         status: "active",
@@ -777,7 +791,8 @@ const handleAddManualCheckIn = async () => {
       const newLog = {
         memberId: selectedMember.id,
         email: selectedMember.email || "",
-        timestamp: now.toISOString(),
+        timestamp: when.toISOString(),
+        classDate: dateKey || when.toISOString().slice(0, 10),
         weekNumber: 1,
         source: "Manual Check-In (Dashboard)",
       };
@@ -787,9 +802,16 @@ const handleAddManualCheckIn = async () => {
     }
 
     // Existing active member
-    const currentWeek =
-      selectedMember.currentWeek ||
-      1;
+    let currentWeek = selectedMember.currentWeek || 1;
+    if (dateKey && selectedMember.startDate) {
+      const start = localNoonFromStart(selectedMember.startDate);
+      if (start) {
+        const [y, mo, d] = dateKey.split("-").map(Number);
+        const cell = new Date(y, mo - 1, d, 12, 0, 0);
+        const diff = Math.round((cell - start) / 86400000);
+        currentWeek = Math.min(12, Math.max(1, Math.floor(diff / 7) + 1));
+      }
+    }
 
     const currentWeeklyCounts = { ...(selectedMember.weeklyCheckIns || {}) };
     const newCount = (currentWeeklyCounts[currentWeek] || 0) + 1;
@@ -810,7 +832,8 @@ const handleAddManualCheckIn = async () => {
     const newLog = {
       memberId: selectedMember.id,
       email: selectedMember.email || "",
-      timestamp: now.toISOString(),
+      timestamp: when.toISOString(),
+      classDate: dateKey || when.toISOString().slice(0, 10),
       weekNumber: currentWeek,
       source: "Manual Check-In (Dashboard)",
     };
@@ -1140,20 +1163,17 @@ const handleAddManualCheckIn = async () => {
     ? Math.round((totalScansCompleted / possibleScans) * 100) 
     : 0;
 
-  // Filtered Members for Table
-  const filteredMembers = filter === "at_risk"
-  ? atRiskMembers
-  : members.filter((m) => {
-      if (filter === "pending") return m.status === "pending";
-      if (filter === "active") return m.status === "active";
-      if (filter === "high_risk") {
-        const currentWeekVisits = m.weeklyCheckIns?.[m.currentWeek] || 0;
-        const risk = getMemberRiskInfo(currentWeekVisits, m.startDate, m.status);
-        return risk.level === "high";
-      }
-      // "all" – exclude cancelled
-      return m.status !== "cancelled";
-    });
+  // Filtered Members for Table — High Risk uses the same array as the title count
+  const filteredMembers =
+    filter === "at_risk"
+      ? atRiskMembers
+      : filter === "high_risk"
+        ? highRiskMembers
+        : members.filter((m) => {
+            if (filter === "pending") return m.status === "pending";
+            if (filter === "active") return m.status === "active";
+            return m.status !== "cancelled";
+          });
   // --- PERSON VIEW DETAILED STATS, NEXT WEEK CALCULATIONS & CALENDAR ---
   let personStats = null;
   let checkInDatesSet = new Set();
@@ -1259,27 +1279,67 @@ const handleAddManualCheckIn = async () => {
   }
 
   return (
-    <div style={styles.container}>
-      {/* ===== MAIN TABS ===== */}
-{/* Header */}
-<div style={styles.header}>
+    <div className="ret-wrap" style={styles.container}>
+      <style>{`
+        html, body, #root {
+          margin: 0;
+          padding: 0;
+          width: 100%;
+          overflow-x: hidden;
+        }
+        html { scrollbar-gutter: auto; }
+        .ret-wrap {
+          box-sizing: border-box;
+          width: 100%;
+          max-width: 100%;
+          overflow-x: hidden;
+          padding-top: 16px;
+          padding-bottom: 16px;
+          padding-left: 16px;
+          padding-right: 16px;
+        }
+        .ret-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+        .ret-title { font-size: 24px; font-weight: 800; color: #0f172a; margin: 0; }
+        .ret-sub { font-size: 13px; color: #64748b; margin: 4px 0 0; }
+        .ret-actions { display: flex; gap: 8px; flex-shrink: 0; }
+        .tw-cards { display: none; }
+        .ar-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+        @media (max-width: 768px) {
+          .ret-header { align-items: center; flex-wrap: wrap; }
+          .ret-actions { margin-left: auto; }
+          .ret-title { font-size: 20px; line-height: 1.1; }
+          .ret-sub { display: none; }
+          .ret-actions button { padding: 8px 10px !important; font-size: 12px !important; }
+          .tw-table { display: none !important; }
+          .tw-cards { display: block; }
+          .tw-metrics { grid-template-columns: 1fr 1fr !important; gap: 8px !important; margin-bottom: 10px !important; }
+          .tw-metrics > div:last-child { grid-column: 1 / -1; }
+          .tw-metrics > div { padding: 8px 10px !important; }
+          .tw-metrics > div > span:nth-child(2) { font-size: 20px !important; margin-top: 2px !important; }
+          .tw-metrics > div > span:nth-child(3) { display: none !important; }
+          .ar-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+          .ar-table { display: none !important; }
+          .ar-cards { display: flex !important; }
+        }
+      `}</style>
+<div className="ret-header">
   <div>
-    <h1 style={styles.title}>Swarm Member Retention Dashboard</h1>
-    <p style={styles.subtitle}>
-      Click any member row to view full stats, adjust check-ins & edit dates
+    <h1 className="ret-title">Swarm Retention</h1>
+    <p className="ret-sub">
+      Click any member to view stats, check-ins, and dates
     </p>
   </div>
 
-  <div style={{ display: "flex", gap: "10px" }}>
+  <div className="ret-actions">
     {mainTab === "twelve_week" && (
       <button style={styles.addBtn} onClick={() => setShowAddModal(true)}>
-        + Add Member
+        + Add
       </button>
     )}
 
     {mainTab === "at_risk" && (
       <button style={styles.addBtn} onClick={() => setShowAddAtRiskModal(true)}>
-        + Add At Risk
+        + Add
       </button>
     )}
 
@@ -1290,7 +1350,7 @@ const handleAddManualCheckIn = async () => {
 </div>
 
 {/* Main Tabs */}
-<div style={{ display: "flex", gap: "8px", marginBottom: "24px" }}>
+<div style={{ display: "flex", gap: "8px", marginBottom: "16px", flexWrap: "wrap" }}>
   <button
     onClick={() => {
       setMainTab("twelve_week");
@@ -1316,7 +1376,7 @@ const handleAddManualCheckIn = async () => {
     {/* STATS CARDS */}
     <div style={styles.statsRow}>
      {/* Metrics Overview */}
-      <div style={styles.metricsGrid}>
+      <div className="tw-metrics" style={styles.metricsGrid}>
         <div style={styles.metricCard}>
           <span style={styles.metricLabel}>Active Onboarding</span>
           <span style={styles.metricValue}>{activeMembers.length}</span>
@@ -1328,7 +1388,7 @@ const handleAddManualCheckIn = async () => {
           <span style={styles.metricSubText}>Signed up, waiting</span>
         </div>
         <div style={{ ...styles.metricCard, borderColor: "#ef4444", backgroundColor: "#fef2f2" }}>
-          <span style={{ ...styles.metricLabel, color: "#991b1b" }}>High Risk (Needs Touchpoint)</span>
+          <span style={{ ...styles.metricLabel, color: "#991b1b" }}>High Risk</span>
           <span style={{ ...styles.metricValue, color: "#dc2626" }}>{highRiskMembers.length}</span>
           <span style={styles.metricSubText}>Behind on weekly pace</span>
         </div>
@@ -1371,8 +1431,16 @@ const handleAddManualCheckIn = async () => {
         ⚠️ High Risk ({highRiskMembers.length})
       </button>
     </div>
-     {/* Main Table */}
-      <div style={styles.tableContainer}>
+     {/* Main Table (desktop) */}
+      <style>{`
+        .tw-cards { display: none; }
+        @media (max-width: 768px) {
+          .tw-table { display: none !important; }
+          .tw-cards { display: block; }
+        }
+      `}</style>
+      {!isMobile && (
+      <div className="tw-table" style={{...styles.tableContainer, overflowX: "auto"}}>
         <table style={styles.table}>
           <thead>
             <tr style={styles.tableHeader}>
@@ -1498,7 +1566,81 @@ const handleAddManualCheckIn = async () => {
           </tbody>
         </table>
       </div>
+      )}
 
+      {isMobile && (
+      <div className="tw-cards" style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%", minWidth: 0 }}>
+        {(filter === "high_risk" ? highRiskMembers : filteredMembers).map((member) => {
+          const isAtRisk = filter === "at_risk" || !!member.atRiskSince;
+          const isPending = member.status === "pending";
+          const masterWeek = !isPending ? getMasterWeekVisits(member) : null;
+          const thisWeekVisits = isPending ? 0 : (masterWeek != null ? masterWeek : (member.weeklyCheckIns?.[member.currentWeek] || 0));
+          const risk = getMemberRiskInfo(thisWeekVisits, member.startDate, member.status);
+          const scans = member.inBodyScans || { scan1: false, scan2: false, scan3: false };
+          const scanCount = (scans.scan1 ? 1 : 0) + (scans.scan2 ? 1 : 0) + (scans.scan3 ? 1 : 0);
+          const weekLabel = isPending ? "Pending" : `Week ${getOnboardingWeekNumber(member.startDate) || member.currentWeek}`;
+          return (
+            <button
+              key={member.id}
+              type="button"
+              onClick={() => isAtRisk ? setSelectedAtRiskMember(member) : handleOpenPersonView(member)}
+              style={{
+                textAlign: "left",
+                background: "#fff",
+                border: "1px solid #e2e8f0",
+                borderRadius: 12,
+                padding: 12,
+                cursor: "pointer",
+                width: "100%",
+                maxWidth: "100%",
+                minWidth: 0,
+                boxSizing: "border-box",
+                overflow: "hidden"
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 800, color: "#0f172a" }}>{member.firstName} {member.lastName}</div>
+                  <div style={{ fontSize: 11, color: "#64748b" }}>{member.email || member.phone || ""}</div>
+                </div>
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#2563eb" }}>{weekLabel}</div>
+                  {!isPending && (
+                    <div style={{ fontSize: 11, fontWeight: 700, color: risk.color }}>{thisWeekVisits} visits</div>
+                  )}
+                  <div style={{ fontSize: 10, color: "#64748b" }}>{scanCount}/3 scans</div>
+                </div>
+              </div>
+              {!isPending && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 3, marginTop: 10 }}>
+                  {[...Array(12)].map((_, i) => {
+                    const weekNum = i + 1;
+                    const count = getWeekVisitCount(member, weekNum);
+                    const todayWeek = getOnboardingWeekNumber(member.startDate);
+                    const isCurrent = weekNum === todayWeek;
+                    let bg = "#e5e7eb";
+                    if (isCurrent) {
+                      const r = getMemberRiskInfo(count, member.startDate, member.status);
+                      bg = r.level === "low" ? "#22c55e" : r.level === "medium" ? "#f59e0b" : "#ef4444";
+                    } else if (count >= 3) bg = "#22c55e";
+                    else if (count === 2) bg = "#f59e0b";
+                    else if (count === 1) bg = "#ef4444";
+                    else if (weekNum < todayWeek && count === 0) bg = "#9ca3af";
+                    return (
+                      <div key={weekNum} title={`Week ${weekNum}: ${count}`} style={{
+                        height: 22, borderRadius: 4, background: bg, color: "#fff",
+                        fontSize: 9, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center",
+                        border: isCurrent ? "2px solid #0f172a" : "none"
+                      }}>{count}</div>
+                    );
+                  })}
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      )}
 
   </>
 )}
@@ -1507,7 +1649,7 @@ const handleAddManualCheckIn = async () => {
 {mainTab === "at_risk" && (
   <div>
     {mainTab === "at_risk" && (
-  <div style={styles.metricsGrid}>
+  <div className="ar-metrics" style={styles.metricsGrid}>
     <div style={styles.metricCard}>
       <span style={styles.metricLabel}>Total At Risk</span>
       <span style={styles.metricValue}>{atRiskMembers.length}</span>
@@ -1546,7 +1688,7 @@ const handleAddManualCheckIn = async () => {
       Members who have not visited in 7+ days
     </p>
 
-    <div style={styles.tableContainer}>
+    <div className="ar-table" style={styles.tableContainer}>
       <table style={styles.table}>
         <thead>
         <tr style={styles.tableHeader}>
@@ -1554,14 +1696,14 @@ const handleAddManualCheckIn = async () => {
           <th style={styles.th}>Days Out</th>
           <th style={styles.th}>Last Check-In</th>
           <th style={styles.th}>At Risk Since</th>
-          <th style={styles.th}>Reach-outs</th>   {/* ✅ ADD THIS */}
+          <th style={styles.th}>Reach-outs</th>
           <th style={{ ...styles.th, textAlign: "right" }}>Details</th>
         </tr>
         </thead>
         <tbody>
           {atRiskMembers.length === 0 ? (
             <tr>
-              <td colSpan={5} style={{ padding: "32px", textAlign: "center", color: "#94a3b8" }}>
+              <td colSpan={6} style={{ padding: "32px", textAlign: "center", color: "#94a3b8" }}>
                 No members currently at risk
               </td>
             </tr>
@@ -1606,7 +1748,6 @@ const handleAddManualCheckIn = async () => {
                     ? new Date(member.atRiskSince).toLocaleDateString()
                     : "—"}
                 </td>
-                {/* ✅ ADD THIS CELL */}
 <td style={styles.td}>
   {(member.reachOuts || []).length === 0 ? (
     <span style={{ color: "#94a3b8", fontSize: 12 }}>None</span>
@@ -1634,6 +1775,43 @@ const handleAddManualCheckIn = async () => {
           )}
         </tbody>
       </table>
+    </div>
+    <div className="ar-cards" style={{ display: "none", flexDirection: "column", gap: 10 }}>
+      {atRiskMembers.length === 0 ? (
+        <div style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>No members currently at risk</div>
+      ) : atRiskMembers.map((member) => (
+        <button
+          key={member.id}
+          type="button"
+          onClick={() => setSelectedAtRiskMember(member)}
+          style={{
+            textAlign: "left",
+            background: "#fff",
+            border: "1px solid #e2e8f0",
+            borderRadius: 12,
+            padding: 12,
+            cursor: "pointer",
+            width: "100%",
+            boxSizing: "border-box"
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 800 }}>{member.firstName} {member.lastName}</div>
+              <div style={{ fontSize: 11, color: "#64748b" }}>{member.email || member.phone || ""}</div>
+            </div>
+            <div style={{
+              background: "#fef2f2", color: "#dc2626", fontWeight: 800, fontSize: 12,
+              borderRadius: 8, padding: "4px 8px", height: "fit-content"
+            }}>
+              {member.daysOut || "?"} days
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>
+            Last check-in: {masterByEmail[(member.email || "").toLowerCase()]?.lastDate || (member.lastCheckIn ? new Date(member.lastCheckIn).toLocaleDateString() : "—")}
+          </div>
+        </button>
+      ))}
     </div>
   </div>
 )}
@@ -1692,14 +1870,6 @@ setSendAsInternal={setSendAsInternal}
     onSave={handleAddAtRiskMember}
   />
 )}
-
-{selectedAtRiskMember && (
-  <AtRiskDetailModal
-    member={selectedAtRiskMember}
-    onClose={() => setSelectedAtRiskMember(null)}
-    onRemoveFromAtRisk={handleRemoveFromAtRisk}
-  />
-)}
       {/* --- ADD MEMBER MODAL --- */}
      {showAddModal && (
   <AddMemberModal
@@ -1728,17 +1898,17 @@ const styles = {
   lockBtn: { padding: "12px", borderRadius: "8px", border: "none", backgroundColor: "#2563eb", color: "#fff", fontWeight: "700", cursor: "pointer", fontSize: "14px" },
 
   // Dashboard Styles
-  container: { fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", padding: "24px", backgroundColor: "#f8fafc", minHeight: "100vh" },
+  container: { fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", padding: 16, backgroundColor: "#f8fafc", minHeight: "100vh", boxSizing: "border-box", width: "100%" },
   loadingContainer: { display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" },
   header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" },
   title: { fontSize: "26px", fontWeight: "800", color: "#0f172a", margin: 0 },
   subtitle: { fontSize: "14px", color: "#64748b", marginTop: "4px", margin: 0 },
   addBtn: { backgroundColor: "#2563eb", color: "#fff", padding: "10px 18px", borderRadius: "8px", border: "none", fontWeight: "600", cursor: "pointer" },
   logoutBtn: { backgroundColor: "#334155", color: "#f8fafc", padding: "10px 14px", borderRadius: "8px", border: "none", fontWeight: "600", cursor: "pointer" },
-  metricsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "14px", marginBottom: "20px" },
-  metricCard: { backgroundColor: "#fff", padding: "16px", borderRadius: "10px", border: "1px solid #e2e8f0", display: "flex", flexDirection: "column" },
+  metricsGrid: { display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: "10px", marginBottom: "16px" },
+  metricCard: { backgroundColor: "#fff", padding: "12px 14px", borderRadius: "10px", border: "1px solid #e2e8f0", display: "flex", flexDirection: "column", minWidth: 0 },
   metricLabel: { fontSize: "12px", color: "#64748b", fontWeight: "600" },
-  metricValue: { fontSize: "28px", fontWeight: "800", color: "#0f172a", marginTop: "4px" },
+  metricValue: { fontSize: "24px", fontWeight: "800", color: "#0f172a", marginTop: "2px" },
   metricSubText: { fontSize: "11px", color: "#94a3b8", marginTop: "2px" },
   filterBar: { display: "flex", gap: "10px", marginBottom: "16px", flexWrap: "wrap" },
   filterBtn: { padding: "8px 14px", borderRadius: "8px", border: "1px solid #cbd5e1", backgroundColor: "#fff", cursor: "pointer", fontSize: "13px" },
