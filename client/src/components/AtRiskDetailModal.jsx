@@ -4,7 +4,7 @@ import { db, storage } from "../firebase";
 import { doc, setDoc } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
-export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk }) {
+export default function AtRiskDetailModal({ member, daysOut: daysOutProp, lastVisit, onClose, onRemoveFromAtRisk }) {
   const [ghlData, setGhlData] = useState({ messages: [], notes: [], contactId: null });
   const [loadingGhl, setLoadingGhl] = useState(false);
   const [activeTab, setActiveTab] = useState("messages");
@@ -55,8 +55,11 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
 
   if (!member) return null;
 
-  const daysOut = member.daysOut || 0;
-  const lastCheckInStr = member.lastCheckIn
+  const daysOut = daysOutProp ?? member.daysOut ?? 0;
+  const lastFromMaster = lastVisit || "";
+  const lastCheckInStr = lastFromMaster
+    ? lastFromMaster
+    : member.lastCheckIn
     ? new Date(member.lastCheckIn).toLocaleDateString("en-US", {
         weekday: "short",
         month: "short",
@@ -307,39 +310,24 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
   };
 
   return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-        {/* FIXED HEADER */}
+    <div className="ar-detail-overlay" style={styles.overlay} onClick={onClose}>
+      <div className="ar-detail-modal" style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.header}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: 22 }}>
+          <div style={{ minWidth: 0 }}>
+            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.2 }}>
               {member.firstName} {member.lastName}
             </h2>
-            <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 14 }}>
-              {member.email || "No email"} • {member.phone || "No phone"}
-            </p>
           </div>
-          <button style={styles.closeBtn} onClick={onClose}>
-            ✕
-          </button>
+          <button type="button" style={styles.closeTopBtn} onClick={onClose}>Close</button>
         </div>
 
-        {/* FIXED SUMMARY */}
-        <div style={{ padding: "0 24px", flexShrink: 0 }}>
+        <div style={{ padding: "0 16px", flexShrink: 0 }}>
           <div style={styles.daysOutCard}>
-            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <div style={styles.daysOutNumber}>{daysOut}</div>
-              <div>
-                <div style={styles.daysOutLabel}>Days Since Last Visit</div>
-                <div style={styles.daysOutSub}>
-                  Last check-in: <strong>{lastCheckInStr}</strong>
-                  <br />
-                  Last SMS: <strong>{lastSmsStr}</strong>
-                  <br />
-                  Flagged: {atRiskSinceStr}
-                  <br />
-                  Reach-outs: <strong>{(member.reachOuts || []).length}</strong>
-                </div>
+              <div style={{ fontSize: 12, color: "#7f1d1d", lineHeight: 1.35 }}>
+                <div style={{ fontWeight: 800, color: "#991b1b" }}>{daysOut} days since last visit</div>
+                Last check-in {lastCheckInStr} · SMS {lastSmsStr} · Reach-outs {(member.reachOuts || []).length}
               </div>
             </div>
           </div>
@@ -364,6 +352,12 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
             onClick={() => setActiveTab("reachouts")}
           >
             📤 Reach-outs
+          </button>
+          <button
+            style={activeTab === "settings" ? styles.tabActive : styles.tab}
+            onClick={() => setActiveTab("settings")}
+          >
+            ⚙️ Settings
           </button>
         </div>
 
@@ -431,6 +425,19 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
                 }}
               >
                 {savingReachOut ? "Saving..." : "+ Log Reach-out"}
+              </button>
+            </div>
+          ) : activeTab === "settings" ? (
+            <div>
+              <p style={{ fontSize: 13, color: "#64748b", marginTop: 0 }}>
+                Remove this person from the At Risk list. They can be added again if they miss 7+ days.
+              </p>
+              <button
+                type="button"
+                style={styles.removeBtn}
+                onClick={() => onRemoveFromAtRisk(member.id)}
+              >
+                Remove from At Risk
               </button>
             </div>
           ) : activeTab === "messages" ? (
@@ -648,18 +655,6 @@ export default function AtRiskDetailModal({ member, onClose, onRemoveFromAtRisk 
           )}
         </div>
 
-        {/* FIXED FOOTER */}
-        <div style={styles.footer}>
-          <button
-            style={styles.removeBtn}
-            onClick={() => onRemoveFromAtRisk(member.id)}
-          >
-            Remove from At Risk
-          </button>
-          <button style={styles.closeFooterBtn} onClick={onClose}>
-            Close
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -690,8 +685,8 @@ const styles = {
   header: {
     display: "flex",
     justifyContent: "space-between",
-    alignItems: "flex-start",
-    padding: "20px 24px",
+    alignItems: "center",
+    padding: "12px 16px",
     borderBottom: "1px solid #e2e8f0",
     flexShrink: 0,
   },
@@ -702,19 +697,30 @@ const styles = {
     cursor: "pointer",
     color: "#64748b",
   },
+  closeTopBtn: {
+    backgroundColor: "#e2e8f0",
+    color: "#0f172a",
+    border: "none",
+    borderRadius: 8,
+    padding: "6px 12px",
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+    flexShrink: 0,
+  },
   daysOutCard: {
-    margin: "12px 0",
+    margin: "8px 0",
     backgroundColor: "#fef2f2",
     border: "1px solid #fecaca",
     borderRadius: 10,
-    padding: "14px 18px",
+    padding: "8px 12px",
   },
   daysOutNumber: {
-    fontSize: 36,
+    fontSize: 22,
     fontWeight: 800,
     color: "#dc2626",
     lineHeight: 1,
-    minWidth: 50,
+    minWidth: 28,
   },
   daysOutLabel: {
     fontSize: 13,

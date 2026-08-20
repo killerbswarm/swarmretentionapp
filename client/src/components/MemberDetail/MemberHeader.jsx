@@ -9,7 +9,7 @@ export default function MemberHeader({
     <div style={styles.personHeader}>
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <h2 style={{ margin: 0, fontSize: "24px" }}>
+          <h2 style={{ margin: 0, fontSize: "18px" }}>
             {selectedMember.firstName} {selectedMember.lastName}
           </h2>
           <span style={{ 
@@ -23,9 +23,6 @@ export default function MemberHeader({
             {riskInfo.label}
           </span>
         </div>
-        <p style={{ margin: "4px 0 0 0", color: "#6b7280", fontSize: "14px" }}>
-          {selectedMember.email} • {selectedMember.phone || "No phone"}
-        </p>
       </div>
       <button style={styles.closeBtn} onClick={onClose}>
         ✕
@@ -38,8 +35,8 @@ const styles = {
   personHeader: {
     display: "flex",
     justifyContent: "space-between",
-    alignItems: "flex-start",
-    padding: "20px 24px",
+    alignItems: "center",
+    padding: "12px 16px",
     borderBottom: "1px solid #e2e8f0",
     position: "sticky",
     top: 0,

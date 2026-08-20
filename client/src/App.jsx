@@ -35,6 +35,7 @@ import { storage } from "./firebase";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import AtRiskDetailModal from "./components/AtRiskDetailModal";
 import AddAtRiskModal from "./components/AddAtRiskModal";
+import AppVersion from "./components/AppVersion";
 import { checkinsDb, collection as masterCol, onSnapshot as masterOnSnapshot, query as masterQuery, where as masterWhere } from "./checkinsFirebase";
 
 // Master check-in service (swarm-checkins)
@@ -1111,6 +1112,34 @@ const handleAddManualCheckIn = async (dateKey) => {
     return Array.from(set).sort();
   }
 
+  function todayNY() {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  }
+
+  function daysOutLive(member) {
+    const dates = getMergedDatesForMember(member);
+    let last = dates.length ? dates[dates.length - 1] : "";
+    if (!last && member.lastCheckIn) {
+      const raw = member.lastCheckIn;
+      if (typeof raw === "string" && /^\d{4}-\d{2}-\d{2}/.test(raw)) last = raw.slice(0, 10);
+      else {
+        const d = raw?.toDate ? raw.toDate() : new Date(raw);
+        if (!isNaN(d)) last = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(d);
+      }
+    }
+    if (!last) return Number(member.daysOut) || 0;
+    const a = new Date(last + "T12:00:00");
+    const b = new Date(todayNY() + "T12:00:00");
+    return Math.max(0, Math.round((b - a) / 86400000));
+  }
+
+  function lastVisitLabel(member) {
+    const dates = getMergedDatesForMember(member);
+    if (dates.length) return dates[dates.length - 1];
+    const email = (member.email || "").toLowerCase();
+    return masterByEmail[email]?.lastDate || "";
+  }
+
   function countDatesInWeek(member, weekNum) {
     if (!member.startDate) return null;
     const range = getWeekDateRange(member.startDate, weekNum);
@@ -1312,19 +1341,44 @@ const handleAddManualCheckIn = async (dateKey) => {
           .ret-actions button { padding: 8px 10px !important; font-size: 12px !important; }
           .tw-table { display: none !important; }
           .tw-cards { display: block; }
-          .tw-metrics { grid-template-columns: 1fr 1fr !important; gap: 8px !important; margin-bottom: 10px !important; }
-          .tw-metrics > div:last-child { grid-column: 1 / -1; }
-          .tw-metrics > div { padding: 8px 10px !important; }
-          .tw-metrics > div > span:nth-child(2) { font-size: 20px !important; margin-top: 2px !important; }
+          .tw-metrics {
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+            gap: 6px !important;
+            margin-bottom: 8px !important;
+          }
+          .tw-metrics > div:last-child { display: none !important; }
+          .tw-metrics > div { padding: 6px 4px !important; }
+          .tw-metrics > div > span:nth-child(1) { font-size: 9px !important; }
+          .tw-metrics > div > span:nth-child(2) { font-size: 16px !important; margin-top: 1px !important; }
           .tw-metrics > div > span:nth-child(3) { display: none !important; }
           .ar-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
           .ar-table { display: none !important; }
           .ar-cards { display: flex !important; }
+          .tw-filters {
+            display: grid !important;
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+            gap: 6px !important;
+            margin-bottom: 10px !important;
+          }
+          .tw-filters button {
+            width: 100% !important;
+            padding: 6px 4px !important;
+            font-size: 10px !important;
+            white-space: nowrap !important;
+          }
+          .ar-detail-overlay { padding: 0 !important; align-items: stretch !important; }
+          .ar-detail-modal {
+            height: 100% !important;
+            max-height: 100% !important;
+            border-radius: 0 !important;
+            max-width: 100% !important;
+          }
         }
       `}</style>
 <div className="ret-header">
   <div>
     <h1 className="ret-title">Swarm Retention</h1>
+    <AppVersion />
     <p className="ret-sub">
       Click any member to view stats, check-ins, and dates
     </p>
@@ -1405,7 +1459,7 @@ const handleAddManualCheckIn = async (dateKey) => {
       </div>
     </div>
         {/* FILTERS */}
-    <div style={styles.filterBar}>
+    <div className="tw-filters" style={styles.filterBar}>
       <button
         style={filter === "all" ? styles.activeFilterBtn : styles.filterBtn}
         onClick={() => setFilter("all")}
@@ -1476,7 +1530,7 @@ const handleAddManualCheckIn = async (dateKey) => {
     >
                   <td style={styles.td}>
                     <div style={styles.memberName}>{member.firstName} {member.lastName}</div>
-                    <div style={styles.memberSub}>{member.email || member.phone || "No contact info"}</div>
+                    
                   </td>
 
                  <td style={styles.td}>
@@ -1489,7 +1543,7 @@ const handleAddManualCheckIn = async (dateKey) => {
             fontSize: "12px",
             fontWeight: "700"
           }}>
-            ⚠️ {member.daysOut || "?"} days out
+            ⚠️ {daysOutLive(member)} days out
           </span>
         ) : isPending ? (
           <span style={styles.badgePending}>⏳ Pending</span>
@@ -1589,7 +1643,7 @@ const handleAddManualCheckIn = async (dateKey) => {
                 background: "#fff",
                 border: "1px solid #e2e8f0",
                 borderRadius: 12,
-                padding: 12,
+                padding: "8px 10px",
                 cursor: "pointer",
                 width: "100%",
                 maxWidth: "100%",
@@ -1598,21 +1652,20 @@ const handleAddManualCheckIn = async (dateKey) => {
                 overflow: "hidden"
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 800, color: "#0f172a" }}>{member.firstName} {member.lastName}</div>
-                  <div style={{ fontSize: 11, color: "#64748b" }}>{member.email || member.phone || ""}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                <div style={{ fontWeight: 800, color: "#0f172a", fontSize: 14, minWidth: 0 }}>
+                  {member.firstName} {member.lastName}
                 </div>
-                <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: "#2563eb" }}>{weekLabel}</div>
+                <div style={{ textAlign: "right", flexShrink: 0, fontSize: 11, color: "#64748b" }}>
+                  <span style={{ fontWeight: 800, color: "#2563eb" }}>{weekLabel}</span>
                   {!isPending && (
-                    <div style={{ fontSize: 11, fontWeight: 700, color: risk.color }}>{thisWeekVisits} visits</div>
+                    <span style={{ fontWeight: 700, color: risk.color }}> · {thisWeekVisits} visits</span>
                   )}
-                  <div style={{ fontSize: 10, color: "#64748b" }}>{scanCount}/3 scans</div>
+                  <span> · {scanCount}/3</span>
                 </div>
               </div>
               {!isPending && (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 3, marginTop: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 3, marginTop: 6 }}>
                   {[...Array(12)].map((_, i) => {
                     const weekNum = i + 1;
                     const count = getWeekVisitCount(member, weekNum);
@@ -1662,10 +1715,10 @@ const handleAddManualCheckIn = async (dateKey) => {
         {atRiskMembers.length
           ? Math.round(
               atRiskMembers
-                .map((m) => Number(m.daysOut) || 0)
+                .map((m) => daysOutLive(m))
                 .filter((d) => d > 0 && d < 500)
                 .reduce((sum, d) => sum + d, 0) /
-              atRiskMembers.filter((m) => (Number(m.daysOut) || 0) > 0 && (Number(m.daysOut) || 0) < 500).length
+              atRiskMembers.filter((m) => { const d = daysOutLive(m); return d > 0 && d < 500; }).length
             )
           : 0}
       </span>
@@ -1676,7 +1729,7 @@ const handleAddManualCheckIn = async (dateKey) => {
       <span style={styles.metricLabel}>Longest Out</span>
       <span style={styles.metricValue}>
         {atRiskMembers.length
-          ? Math.max(...atRiskMembers.map((m) => m.daysOut || 0))
+          ? Math.max(...atRiskMembers.map((m) => daysOutLive(m)))
           : 0}
       </span>
       <span style={styles.metricSubText}>Days since last visit</span>
@@ -1718,9 +1771,7 @@ const handleAddManualCheckIn = async (dateKey) => {
                   <div style={styles.memberName}>
                     {member.firstName} {member.lastName}
                   </div>
-                  <div style={styles.memberSub}>
-                    {member.email || member.phone || "No contact"}
-                  </div>
+
                 </td>
                 <td style={styles.td}>
                   <span style={{
@@ -1731,7 +1782,7 @@ const handleAddManualCheckIn = async (dateKey) => {
                     fontSize: "12px",
                     fontWeight: "700"
                   }}>
-                    {member.daysOut || "?"} days
+                    {daysOutLive(member)} days
                   </span>
                 </td>
                 <td style={styles.td}>
@@ -1795,20 +1846,21 @@ const handleAddManualCheckIn = async (dateKey) => {
             boxSizing: "border-box"
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 800 }}>{member.firstName} {member.lastName}</div>
-              <div style={{ fontSize: 11, color: "#64748b" }}>{member.email || member.phone || ""}</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <div style={{ minWidth: 0, fontSize: 13, lineHeight: 1.3 }}>
+              <span style={{ fontWeight: 800 }}>{member.firstName} {member.lastName}</span>
+              <span style={{ color: "#64748b", fontWeight: 500 }}>
+                {" · "}
+                {masterByEmail[(member.email || "").toLowerCase()]?.lastDate
+                  || (member.lastCheckIn ? new Date(member.lastCheckIn).toLocaleDateString() : "—")}
+              </span>
             </div>
             <div style={{
               background: "#fef2f2", color: "#dc2626", fontWeight: 800, fontSize: 12,
-              borderRadius: 8, padding: "4px 8px", height: "fit-content"
+              borderRadius: 8, padding: "4px 8px", height: "fit-content", flexShrink: 0
             }}>
-              {member.daysOut || "?"} days
+              {daysOutLive(member)} days
             </div>
-          </div>
-          <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>
-            Last check-in: {masterByEmail[(member.email || "").toLowerCase()]?.lastDate || (member.lastCheckIn ? new Date(member.lastCheckIn).toLocaleDateString() : "—")}
           </div>
         </button>
       ))}
@@ -1860,6 +1912,8 @@ setSendAsInternal={setSendAsInternal}
   {selectedAtRiskMember && (
   <AtRiskDetailModal
     member={selectedAtRiskMember}
+    daysOut={daysOutLive(selectedAtRiskMember)}
+    lastVisit={lastVisitLabel(selectedAtRiskMember)}
     onClose={() => setSelectedAtRiskMember(null)}
     onRemoveFromAtRisk={handleRemoveFromAtRisk}
   />

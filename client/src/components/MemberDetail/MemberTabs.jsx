@@ -49,37 +49,37 @@ export default function MemberTabs({
           style={activeTab === "calendar" ? styles.tabBtnActive : styles.tabBtn}
           onClick={() => setActiveTab("calendar")}
         >
-          📅 Calendar
+          Calendar
         </button>
         <button
           style={activeTab === "scans" ? styles.tabBtnActive : styles.tabBtn}
           onClick={() => setActiveTab("scans")}
         >
-          🧍 Scans
+          Scans
         </button>
         <button
           style={activeTab === "messages" ? styles.tabBtnActive : styles.tabBtn}
           onClick={() => setActiveTab("messages")}
         >
-          💬 SMS
+          SMS
         </button>
         <button
           style={activeTab === "notes" ? styles.tabBtnActive : styles.tabBtn}
           onClick={() => setActiveTab("notes")}
         >
-          📝 Notes
+          Notes
         </button>
         <button
           style={activeTab === "appts" ? styles.tabBtnActive : styles.tabBtn}
           onClick={() => setActiveTab("appts")}
         >
-          🗓️ Appts
+          Appts
         </button>
         <button
           style={activeTab === "settings" ? styles.tabBtnActive : styles.tabBtn}
           onClick={() => setActiveTab("settings")}
         >
-          ⚙️ Settings
+          Settings
         </button>
       </div>
 
@@ -448,7 +448,7 @@ const styles = {
     backgroundColor: "#fff",
     border: "1px solid #e2e8f0",
     borderRadius: "10px",
-    padding: "16px",
+    padding: "8px 0 0",
     marginBottom: 0,
     flex: 1,
     minHeight: 0,
@@ -457,11 +457,13 @@ const styles = {
   },
   tabHeaderBar: {
     display: "flex",
-    gap: "6px",
-    marginBottom: "10px",
-    flexWrap: "wrap",
-    overflow: "visible",
+    gap: 0,
+    marginBottom: 8,
+    flexWrap: "nowrap",
+    overflowX: "auto",
+    overflowY: "hidden",
     flexShrink: 0,
+    borderBottom: "1px solid #e2e8f0",
   },
   tabBody: {
     flex: 1,
@@ -489,23 +491,28 @@ const styles = {
     marginBottom: "12px",
   },
   tabBtn: {
-    padding: "6px 10px",
-    fontSize: "12px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-    backgroundColor: "#f8fafc",
-    color: "#475569",
+    flex: 1,
+    padding: "8px 6px",
+    fontSize: 12,
+    border: "none",
+    borderBottom: "2px solid transparent",
+    background: "none",
+    color: "#64748b",
     cursor: "pointer",
+    whiteSpace: "nowrap",
+    fontWeight: 600,
   },
   tabBtnActive: {
-    padding: "6px 12px",
-    fontSize: "12px",
-    borderRadius: "6px",
-    border: "1px solid #2563eb",
-    backgroundColor: "#eff6ff",
+    flex: 1,
+    padding: "8px 6px",
+    fontSize: 12,
+    border: "none",
+    borderBottom: "2px solid #2563eb",
+    background: "none",
     color: "#1d4ed8",
-    fontWeight: "600",
+    fontWeight: 700,
     cursor: "pointer",
+    whiteSpace: "nowrap",
   },
   manualCheckInBtn: {
     backgroundColor: "#16a34a",
