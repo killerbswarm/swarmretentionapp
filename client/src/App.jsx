@@ -36,6 +36,10 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import AtRiskDetailModal from "./components/AtRiskDetailModal";
 import AddAtRiskModal from "./components/AddAtRiskModal";
 import AppVersion from "./components/AppVersion";
+import TwelveWeekView from "./components/TwelveWeekView";
+import AtRiskView from "./components/AtRiskView";
+import SettingsView from "./components/SettingsView";
+import { getStyles } from "./styles";
 import { checkinsDb, collection as masterCol, onSnapshot as masterOnSnapshot, query as masterQuery, where as masterWhere } from "./checkinsFirebase";
 
 // Master check-in service (swarm-checkins)
@@ -115,6 +119,15 @@ export default function App() {
   const [sendAsInternal, setSendAsInternal] = useState(false);
   const [scanBusy, setScanBusy] = useState(false);
   const [scanMsg, setScanMsg] = useState("");
+  const [darkMode, setDarkMode] = useState(() => {
+    try { return localStorage.getItem("swarm_retention_theme") === "dark"; } catch { return false; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem("swarm_retention_theme", darkMode ? "dark" : "light"); } catch {}
+  }, [darkMode]);
+
+  const themeStyles = getStyles(darkMode);
 
   // Person View Modal State
   const [selectedMember, setSelectedMember] = useState(null);
@@ -1054,7 +1067,7 @@ const handleAddManualCheckIn = async (dateKey) => {
 
   if (authChecking) {
     return (
-      <div style={styles.loadingContainer}>
+      <div style={themeStyles.loadingContainer}>
         <h2>Verifying Security Credentials...</h2>
       </div>
     );
@@ -1323,14 +1336,14 @@ const handleAddManualCheckIn = async (dateKey) => {
 
   if (loading) {
     return (
-      <div style={styles.loadingContainer}>
+      <div style={themeStyles.loadingContainer}>
         <h2>Loading Swarm Member Retention...</h2>
       </div>
     );
   }
 
   return (
-    <div className="ret-wrap" style={styles.container}>
+    <div className={`ret-wrap${darkMode ? " ret-dark" : ""}`} style={themeStyles.container}>
       <style>{`
         html, body, #root {
           margin: 0;
@@ -1362,6 +1375,11 @@ const handleAddManualCheckIn = async (dateKey) => {
         .ret-settings h2 { margin: 0 0 6px; font-size: 18px; }
         .ret-settings p { margin: 0 0 14px; color: #64748b; font-size: 13px; }
         .ret-scan-msg { margin-top: 12px; font-size: 13px; color: #0f172a; }
+        .ret-wrap.ret-dark { background: #0f172a !important; color: #e2e8f0; }
+        .ret-dark .ret-settings { background: #1e293b; border-color: #334155; }
+        .ret-dark .ret-settings h2, .ret-dark .ret-scan-msg { color: #f8fafc; }
+        .ret-dark .ret-settings p { color: #94a3b8; }
+        .ret-dark .ret-settings hr { border-top-color: #334155 !important; }
         .tw-cards { display: none; }
         .ar-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
         @media (max-width: 768px) {
@@ -1442,488 +1460,67 @@ const handleAddManualCheckIn = async (dateKey) => {
 
   <div className="ret-actions">
     {mainTab === "twelve_week" && (
-      <button style={styles.addBtn} onClick={() => setShowAddModal(true)}>
+      <button style={themeStyles.addBtn} onClick={() => setShowAddModal(true)}>
         + Add
       </button>
     )}
     {mainTab === "at_risk" && (
-      <button style={styles.addBtn} onClick={() => setShowAddAtRiskModal(true)}>
+      <button style={themeStyles.addBtn} onClick={() => setShowAddAtRiskModal(true)}>
         + Add
       </button>
     )}
-    <button style={styles.logoutBtn} onClick={handleLogout}>
+    <button style={themeStyles.logoutBtn} onClick={handleLogout}>
       Logout
     </button>
   </div>
 </header>
 
 {mainTab === "settings" && (
-  <div className="ret-settings">
-    <h2>At-risk scan</h2>
-    <p>
-      Same job that runs every night at 7am. Checks GHL tags and removes
-      pending cancel, cancelled, inactive, nomembership, and former members.
-    </p>
-    <button
-      type="button"
-      disabled={scanBusy}
-      onClick={runAtRiskScanNow}
-      style={styles.addBtn}
-    >
-      {scanBusy ? "Scanning…" : "Scan at-risk now"}
-    </button>
-    {scanMsg && <p className="ret-scan-msg">{scanMsg}</p>}
-  </div>
+  <SettingsView
+    styles={themeStyles}
+    darkMode={darkMode}
+    setDarkMode={setDarkMode}
+    scanBusy={scanBusy}
+    scanMsg={scanMsg}
+    runAtRiskScanNow={runAtRiskScanNow}
+  />
 )}
 
-
-{/* ===== 12-WEEK VIEW ===== */}
 {mainTab === "twelve_week" && (
-  <>
-    {/* STATS CARDS */}
-    <div style={styles.statsRow}>
-     {/* Metrics Overview */}
-      <div className="tw-metrics" style={styles.metricsGrid}>
-        <div style={styles.metricCard}>
-          <span style={styles.metricLabel}>Active Onboarding</span>
-          <span style={styles.metricValue}>{activeMembers.length}</span>
-          <span style={styles.metricSubText}>In 12-week program</span>
-        </div>
-        <div style={{ ...styles.metricCard, borderColor: "#3b82f6", backgroundColor: "#eff6ff" }}>
-          <span style={{ ...styles.metricLabel, color: "#1e40af" }}>Pending 1st Class</span>
-          <span style={{ ...styles.metricValue, color: "#2563eb" }}>{pendingMembers.length}</span>
-          <span style={styles.metricSubText}>Signed up, waiting</span>
-        </div>
-        <div style={{ ...styles.metricCard, borderColor: "#ef4444", backgroundColor: "#fef2f2" }}>
-          <span style={{ ...styles.metricLabel, color: "#991b1b" }}>High Risk</span>
-          <span style={{ ...styles.metricValue, color: "#dc2626" }}>{highRiskMembers.length}</span>
-          <span style={styles.metricSubText}>Behind on weekly pace</span>
-        </div>
-        <div style={styles.metricCard}>
-          <span style={styles.metricLabel}>Avg Weekly Visits</span>
-          <span style={styles.metricValue}>{avgVisitsPerWeek}</span>
-          <span style={styles.metricSubText}>Per active member</span>
-        </div>
-        <div style={styles.metricCard}>
-          <span style={styles.metricLabel}>InBody Scan Rate</span>
-          <span style={styles.metricValue}>{inBodyCompletionRate}%</span>
-          <span style={styles.metricSubText}>{totalScansCompleted} / {possibleScans} scans done</span>
-        </div>
-      </div>
-    </div>
-        {/* FILTERS */}
-    <div className="tw-filters" style={styles.filterBar}>
-      <button
-        style={filter === "all" ? styles.activeFilterBtn : styles.filterBtn}
-        onClick={() => setFilter("all")}
-      >
-        All Members ({members.filter(m => m.status !== "cancelled").length})
-      </button>
-      <button
-        style={filter === "pending" ? styles.activeFilterBtn : styles.filterBtn}
-        onClick={() => setFilter("pending")}
-      >
-        ⏳ Pending ({pendingMembers.length})
-      </button>
-      <button
-        style={filter === "active" ? styles.activeFilterBtn : styles.filterBtn}
-        onClick={() => setFilter("active")}
-      >
-        🔥 Active ({activeMembers.length})
-      </button>
-      <button
-        style={filter === "high_risk" ? styles.activeFilterBtn : styles.filterBtn}
-        onClick={() => setFilter("high_risk")}
-      >
-        ⚠️ High Risk ({highRiskMembers.length})
-      </button>
-    </div>
-     {/* Main Table (desktop) */}
-      <style>{`
-        .tw-cards { display: none; }
-        @media (max-width: 768px) {
-          .tw-table { display: none !important; }
-          .tw-cards { display: block; }
-        }
-      `}</style>
-      {!isMobile && (
-      <div className="tw-table" style={{...styles.tableContainer, overflowX: "auto"}}>
-        <table style={styles.table}>
-          <thead>
-            <tr style={styles.tableHeader}>
-              <th style={styles.th}>Member Name</th>
-              <th style={styles.th}>Week</th>
-              <th style={styles.th}>InBody Scans</th>
-              <th style={styles.th}>This Wk Visits</th>
-              <th style={styles.th}>12-Week Attendance Matrix</th>
-              <th style={{ ...styles.th, textAlign: "right" }}>Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredMembers.map((member) => {
-              const isAtRisk = filter === "at_risk" || !!member.atRiskSince;
-              const isPending = member.status === "pending";
-              const masterWeek = !isPending ? getMasterWeekVisits(member) : null;
-              const thisWeekVisits = isPending ? 0 : (masterWeek != null ? masterWeek : (member.weeklyCheckIns?.[member.currentWeek] || 0));
-              const risk = getMemberRiskInfo(thisWeekVisits, member.startDate, member.status);
-              const scans = member.inBodyScans || { scan1: false, scan2: false, scan3: false };
-              const scanCount = (scans.scan1 ? 1 : 0) + (scans.scan2 ? 1 : 0) + (scans.scan3 ? 1 : 0);
-
-              return (
-                <tr 
-                  key={member.id} 
-                  style={styles.clickableTableRow}
-                 onClick={() => {
-        if (isAtRisk) {
-          setSelectedAtRiskMember(member);
-        } else {
-          handleOpenPersonView(member);
-        }
-      }}
-    >
-                  <td style={styles.td}>
-                    <div style={styles.memberName}>{member.firstName} {member.lastName}</div>
-                    
-                  </td>
-
-                 <td style={styles.td}>
-        {isAtRisk ? (
-          <span style={{
-            backgroundColor: "#fef2f2",
-            color: "#dc2626",
-            padding: "3px 8px",
-            borderRadius: "6px",
-            fontSize: "12px",
-            fontWeight: "700"
-          }}>
-            ⚠️ {daysOutLive(member)} days out
-          </span>
-        ) : isPending ? (
-          <span style={styles.badgePending}>⏳ Pending</span>
-        ) : (
-          <span style={styles.badgeWeek}>Week {getOnboardingWeekNumber(member.startDate) || member.currentWeek}</span>
-        )}
-      </td>
-
-                  <td style={styles.td}>
-                    <span style={scanCount === 3 ? styles.scanCompleteBadge : styles.scanPartialBadge}>
-                      {scanCount} / 3 Scans
-                    </span>
-                  </td>
-
-                  <td style={styles.td}>
-                    {isPending ? (
-                      <span style={{ fontSize: "12px", color: "#9ca3af", fontStyle: "italic" }}>Not started</span>
-                    ) : (
-                      <span style={{ backgroundColor: risk.bg, color: risk.color, padding: "3px 8px", borderRadius: "6px", fontSize: "12px", fontWeight: "700" }}>
-                        {thisWeekVisits} visits
-                      </span>
-                    )}
-                  </td>
-
-                  <td style={styles.td}>
-                    {isPending ? (
-                      <span style={styles.waitingText}>Waiting for 1st check-in to start journey</span>
-                    ) : (
-                      <div style={styles.matrixGrid}>
-                        {[...Array(12)].map((_, i) => {
-                          const weekNum = i + 1;
-                          const count = getWeekVisitCount(member, weekNum);
-                          const todayWeek = getOnboardingWeekNumber(member.startDate);
-                          const isCurrent = weekNum === todayWeek;
-
-                          let bg = "#e5e7eb";
-                          let titleExtra = "";
-                          if (isCurrent) {
-                            // Pace-aware: 1 visit early in the week is still on track
-                            const risk = getMemberRiskInfo(count, member.startDate, member.status);
-                            if (risk.level === "low") bg = "#22c55e";
-                            else if (risk.level === "medium") bg = "#f59e0b";
-                            else if (risk.level === "high") bg = "#ef4444";
-                            titleExtra = ` · ${risk.label}`;
-                          } else if (count >= 3) bg = "#22c55e";
-                          else if (count === 2) bg = "#f59e0b";
-                          else if (count === 1) bg = "#ef4444";
-                          else if (weekNum < todayWeek && count === 0) bg = "#9ca3af";
-
-                          return (
-                            <div 
-                              key={weekNum} 
-                              title={`Week ${weekNum}: ${count} visits${titleExtra}`}
-                              style={{
-                                ...styles.matrixBox,
-                                backgroundColor: bg,
-                                border: isCurrent ? "2px solid #000" : "1px solid #d1d5db"
-                              }}
-                            >
-                              <span style={styles.matrixText}>{count}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </td>
-
-                  <td style={{ ...styles.td, textAlign: "right" }}>
-                    <span style={styles.arrowIcon}>→</span>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      )}
-
-      {isMobile && (
-      <div className="tw-cards" style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%", minWidth: 0 }}>
-        {(filter === "high_risk" ? highRiskMembers : filteredMembers).map((member) => {
-          const isAtRisk = filter === "at_risk" || !!member.atRiskSince;
-          const isPending = member.status === "pending";
-          const masterWeek = !isPending ? getMasterWeekVisits(member) : null;
-          const thisWeekVisits = isPending ? 0 : (masterWeek != null ? masterWeek : (member.weeklyCheckIns?.[member.currentWeek] || 0));
-          const risk = getMemberRiskInfo(thisWeekVisits, member.startDate, member.status);
-          const scans = member.inBodyScans || { scan1: false, scan2: false, scan3: false };
-          const scanCount = (scans.scan1 ? 1 : 0) + (scans.scan2 ? 1 : 0) + (scans.scan3 ? 1 : 0);
-          const weekLabel = isPending ? "Pending" : `Week ${getOnboardingWeekNumber(member.startDate) || member.currentWeek}`;
-          return (
-            <button
-              key={member.id}
-              type="button"
-              onClick={() => isAtRisk ? setSelectedAtRiskMember(member) : handleOpenPersonView(member)}
-              style={{
-                textAlign: "left",
-                background: "#fff",
-                border: "1px solid #e2e8f0",
-                borderRadius: 12,
-                padding: "8px 10px",
-                cursor: "pointer",
-                width: "100%",
-                maxWidth: "100%",
-                minWidth: 0,
-                boxSizing: "border-box",
-                overflow: "hidden"
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                <div style={{ fontWeight: 800, color: "#0f172a", fontSize: 14, minWidth: 0 }}>
-                  {member.firstName} {member.lastName}
-                </div>
-                <div style={{ textAlign: "right", flexShrink: 0, fontSize: 11, color: "#64748b" }}>
-                  <span style={{ fontWeight: 800, color: "#2563eb" }}>{weekLabel}</span>
-                  {!isPending && (
-                    <span style={{ fontWeight: 700, color: risk.color }}> · {thisWeekVisits} visits</span>
-                  )}
-                  <span> · {scanCount}/3</span>
-                </div>
-              </div>
-              {!isPending && (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 3, marginTop: 6 }}>
-                  {[...Array(12)].map((_, i) => {
-                    const weekNum = i + 1;
-                    const count = getWeekVisitCount(member, weekNum);
-                    const todayWeek = getOnboardingWeekNumber(member.startDate);
-                    const isCurrent = weekNum === todayWeek;
-                    let bg = "#e5e7eb";
-                    if (isCurrent) {
-                      const r = getMemberRiskInfo(count, member.startDate, member.status);
-                      bg = r.level === "low" ? "#22c55e" : r.level === "medium" ? "#f59e0b" : "#ef4444";
-                    } else if (count >= 3) bg = "#22c55e";
-                    else if (count === 2) bg = "#f59e0b";
-                    else if (count === 1) bg = "#ef4444";
-                    else if (weekNum < todayWeek && count === 0) bg = "#9ca3af";
-                    return (
-                      <div key={weekNum} title={`Week ${weekNum}: ${count}`} style={{
-                        height: 22, borderRadius: 4, background: bg, color: "#fff",
-                        fontSize: 9, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center",
-                        border: isCurrent ? "2px solid #0f172a" : "none"
-                      }}>{count}</div>
-                    );
-                  })}
-                </div>
-              )}
-            </button>
-          );
-        })}
-      </div>
-      )}
-
-  </>
+  <TwelveWeekView
+    styles={themeStyles}
+    members={members}
+    filter={filter}
+    setFilter={setFilter}
+    pendingMembers={pendingMembers}
+    activeMembers={activeMembers}
+    highRiskMembers={highRiskMembers}
+    filteredMembers={filteredMembers}
+    avgVisitsPerWeek={avgVisitsPerWeek}
+    inBodyCompletionRate={inBodyCompletionRate}
+    totalScansCompleted={totalScansCompleted}
+    possibleScans={possibleScans}
+    isMobile={isMobile}
+    getMasterWeekVisits={getMasterWeekVisits}
+    getOnboardingWeekNumber={getOnboardingWeekNumber}
+    getWeekVisitCount={getWeekVisitCount}
+    daysOutLive={daysOutLive}
+    setSelectedAtRiskMember={setSelectedAtRiskMember}
+    handleOpenPersonView={handleOpenPersonView}
+  />
 )}
 
-{/* ===== AT RISK VIEW ===== */}
 {mainTab === "at_risk" && (
-  <div>
-    {mainTab === "at_risk" && (
-  <div className="ar-metrics" style={styles.metricsGrid}>
-    <div style={styles.metricCard}>
-      <span style={styles.metricLabel}>Total At Risk</span>
-      <span style={styles.metricValue}>{atRiskMembers.length}</span>
-      <span style={styles.metricSubText}>Currently out 7+ days</span>
-    </div>
-
- <div style={styles.metricCard}>
-      <span style={styles.metricLabel}>Avg Days Out</span>
-      <span style={styles.metricValue}>
-        {atRiskMembers.length
-          ? Math.round(
-              atRiskMembers
-                .map((m) => daysOutLive(m))
-                .filter((d) => d > 0 && d < 500)
-                .reduce((sum, d) => sum + d, 0) /
-              atRiskMembers.filter((m) => { const d = daysOutLive(m); return d > 0 && d < 500; }).length
-            )
-          : 0}
-      </span>
-      <span style={styles.metricSubText}>Average time away</span>
-    </div>
-
-    <div style={styles.metricCard}>
-      <span style={styles.metricLabel}>Longest Out</span>
-      <span style={styles.metricValue}>
-        {atRiskMembers.length
-          ? Math.max(...atRiskMembers.map((m) => daysOutLive(m)))
-          : 0}
-      </span>
-      <span style={styles.metricSubText}>Days since last visit</span>
-    </div>
-  </div>
-)}
-    <h3 style={{ marginTop: 0, marginBottom: "4px" }}>At Risk Members</h3>
-    <p style={{ color: "#64748b", marginBottom: "20px", fontSize: "14px" }}>
-      Members who have not visited in 7+ days
-    </p>
-
-    <div className="ar-table" style={styles.tableContainer}>
-      <table style={styles.table}>
-        <thead>
-        <tr style={styles.tableHeader}>
-          <th style={styles.th}>Member</th>
-          <th style={styles.th}>Days Out</th>
-          <th style={styles.th}>Last Check-In</th>
-          <th style={styles.th}>At Risk Since</th>
-          <th style={styles.th}>Reach-outs</th>
-          <th style={{ ...styles.th, textAlign: "right" }}>Details</th>
-        </tr>
-        </thead>
-        <tbody>
-          {atRiskMembers.length === 0 ? (
-            <tr>
-              <td colSpan={6} style={{ padding: "32px", textAlign: "center", color: "#94a3b8" }}>
-                No members currently at risk
-              </td>
-            </tr>
-          ) : (
-            atRiskMembers.map((member) => (
-              <tr
-                key={member.id}
-                style={styles.clickableTableRow}
-                onClick={() => setSelectedAtRiskMember(member)}
-              >
-                <td style={styles.td}>
-                  <div style={styles.memberName}>
-                    {member.firstName} {member.lastName}
-                  </div>
-
-                </td>
-                <td style={styles.td}>
-                  <span style={{
-                    backgroundColor: "#fef2f2",
-                    color: "#dc2626",
-                    padding: "3px 8px",
-                    borderRadius: "6px",
-                    fontSize: "12px",
-                    fontWeight: "700"
-                  }}>
-                    {daysOutLive(member)} days
-                  </span>
-                </td>
-                <td style={styles.td}>
-                  {(() => {
-                    const email = (member.email || "").toLowerCase();
-                    const masterLast = masterByEmail[email]?.lastDate;
-                    if (masterLast) return masterLast;
-                    if (member.lastCheckIn) return new Date(member.lastCheckIn).toLocaleDateString();
-                    return "—";
-                  })()}
-                </td>
-                <td style={styles.td}>
-                  {member.atRiskSince
-                    ? new Date(member.atRiskSince).toLocaleDateString()
-                    : "—"}
-                </td>
-<td style={styles.td}>
-  {(member.reachOuts || []).length === 0 ? (
-    <span style={{ color: "#94a3b8", fontSize: 12 }}>None</span>
-  ) : (
-    <span
-      style={{
-        backgroundColor: "#dbeafe",
-        color: "#1d4ed8",
-        padding: "3px 8px",
-        borderRadius: 6,
-        fontSize: 12,
-        fontWeight: 700,
-      }}
-    >
-      {(member.reachOuts || []).length} reach-out
-      {(member.reachOuts || []).length === 1 ? "" : "s"}
-    </span>
-  )}
-</td>
-                <td style={{ ...styles.td, textAlign: "right", color: "#64748b" }}>
-                  View →
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-    <div className="ar-cards" style={{ display: "none", flexDirection: "column", gap: 10 }}>
-      {atRiskMembers.length === 0 ? (
-        <div style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>No members currently at risk</div>
-      ) : atRiskMembers.map((member) => (
-        <button
-          key={member.id}
-          type="button"
-          onClick={() => setSelectedAtRiskMember(member)}
-          style={{
-            textAlign: "left",
-            background: "#fff",
-            border: "1px solid #e2e8f0",
-            borderRadius: 12,
-            padding: 12,
-            cursor: "pointer",
-            width: "100%",
-            boxSizing: "border-box"
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <div style={{ minWidth: 0, fontSize: 13, lineHeight: 1.3 }}>
-              <span style={{ fontWeight: 800 }}>{member.firstName} {member.lastName}</span>
-              <span style={{ color: "#64748b", fontWeight: 500 }}>
-                {" · "}
-                {masterByEmail[(member.email || "").toLowerCase()]?.lastDate
-                  || (member.lastCheckIn ? new Date(member.lastCheckIn).toLocaleDateString() : "—")}
-              </span>
-            </div>
-            <div style={{
-              background: "#fef2f2", color: "#dc2626", fontWeight: 800, fontSize: 12,
-              borderRadius: 8, padding: "4px 8px", height: "fit-content", flexShrink: 0
-            }}>
-              {daysOutLive(member)} days
-            </div>
-          </div>
-        </button>
-      ))}
-    </div>
-  </div>
+  <AtRiskView
+    styles={themeStyles}
+    atRiskMembers={atRiskMembers}
+    daysOutLive={daysOutLive}
+    masterByEmail={masterByEmail}
+    setSelectedAtRiskMember={setSelectedAtRiskMember}
+  />
 )}
 
- 
-
-      {/* --- PERSON VIEW MODAL --- */}
+{/* --- PERSON VIEW MODAL --- */}
    {selectedMember && (
   <MemberDetailModal
     selectedMember={selectedMember}
@@ -1989,103 +1586,3 @@ setSendAsInternal={setSendAsInternal}
     </div>
   );
 }
-
-// Inline Styling System
-const styles = {
-  // Lock Screen Styles
-  lockScreenContainer: { display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", backgroundColor: "#0f172a", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" },
-  lockCard: { backgroundColor: "#1e293b", padding: "36px", borderRadius: "16px", border: "1px solid #334155", textAlign: "center", width: "360px", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.5)" },
-  lockIcon: { fontSize: "40px", marginBottom: "12px" },
-  lockTitle: { color: "#f8fafc", fontSize: "22px", fontWeight: "800", margin: "0 0 6px 0" },
-  lockSubtitle: { color: "#94a3b8", fontSize: "13px", margin: "0 0 24px 0" },
-  lockForm: { display: "flex", flexDirection: "column", gap: "12px" },
-  lockInput: { padding: "12px 14px", borderRadius: "8px", border: "1px solid #475569", backgroundColor: "#0f172a", color: "#fff", fontSize: "14px", outline: "none", textAlign: "center" },
-  lockInputError: { padding: "12px 14px", borderRadius: "8px", border: "1px solid #ef4444", backgroundColor: "#0f172a", color: "#fff", fontSize: "14px", outline: "none", textAlign: "center" },
-  errorText: { color: "#f87171", fontSize: "12px", margin: "0" },
-  lockBtn: { padding: "12px", borderRadius: "8px", border: "none", backgroundColor: "#2563eb", color: "#fff", fontWeight: "700", cursor: "pointer", fontSize: "14px" },
-
-  // Dashboard Styles
-  container: { fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", padding: 16, backgroundColor: "#f8fafc", minHeight: "100vh", boxSizing: "border-box", width: "100%" },
-  loadingContainer: { display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" },
-  title: { fontSize: "26px", fontWeight: "800", color: "#0f172a", margin: 0 },
-  subtitle: { fontSize: "14px", color: "#64748b", marginTop: "4px", margin: 0 },
-  addBtn: { backgroundColor: "#2563eb", color: "#fff", padding: "10px 18px", borderRadius: "8px", border: "none", fontWeight: "600", cursor: "pointer" },
-  logoutBtn: { backgroundColor: "#334155", color: "#f8fafc", padding: "10px 14px", borderRadius: "8px", border: "none", fontWeight: "600", cursor: "pointer" },
-  metricsGrid: { display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: "10px", marginBottom: "16px" },
-  metricCard: { backgroundColor: "#fff", padding: "12px 14px", borderRadius: "10px", border: "1px solid #e2e8f0", display: "flex", flexDirection: "column", minWidth: 0 },
-  metricLabel: { fontSize: "12px", color: "#64748b", fontWeight: "600" },
-  metricValue: { fontSize: "24px", fontWeight: "800", color: "#0f172a", marginTop: "2px" },
-  metricSubText: { fontSize: "11px", color: "#94a3b8", marginTop: "2px" },
-  filterBar: { display: "flex", gap: "10px", marginBottom: "16px", flexWrap: "wrap" },
-  filterBtn: { padding: "8px 14px", borderRadius: "8px", border: "1px solid #cbd5e1", backgroundColor: "#fff", cursor: "pointer", fontSize: "13px" },
-  activeFilterBtn: { padding: "8px 14px", borderRadius: "8px", border: "none", backgroundColor: "#2563eb", color: "#fff", fontWeight: "600", cursor: "pointer", fontSize: "13px" },
-  tableContainer: { backgroundColor: "#fff", borderRadius: "10px", border: "1px solid #e2e8f0", overflow: "hidden" },
-  table: { width: "100%", borderCollapse: "collapse", textAlign: "left" },
-  tableHeader: { backgroundColor: "#f8fafc", borderBottom: "1px solid #e2e8f0" },
-  th: { padding: "12px 16px", fontSize: "11px", fontWeight: "700", color: "#475569", textTransform: "uppercase" },
-  clickableTableRow: { borderBottom: "1px solid #f1f5f9", cursor: "pointer", transition: "background-color 0.15s" },
-  td: { padding: "14px 16px", verticalAlign: "middle" },
-  memberName: { fontWeight: "600", color: "#0f172a", fontSize: "14px" },
-  memberSub: { fontSize: "12px", color: "#64748b" },
-  badgePending: { backgroundColor: "#eff6ff", color: "#1d4ed8", padding: "3px 8px", borderRadius: "6px", fontSize: "12px", fontWeight: "600" },
-  badgeWeek: { backgroundColor: "#f1f5f9", color: "#334155", padding: "3px 8px", borderRadius: "6px", fontSize: "12px", fontWeight: "600" },
-  scanCompleteBadge: { backgroundColor: "#dcfce7", color: "#15803d", padding: "3px 8px", borderRadius: "6px", fontSize: "12px", fontWeight: "600" },
-  scanPartialBadge: { backgroundColor: "#f8fafc", color: "#64748b", border: "1px solid #cbd5e1", padding: "3px 8px", borderRadius: "6px", fontSize: "12px", fontWeight: "500" },
-  waitingText: { fontSize: "12px", color: "#94a3b8", fontStyle: "italic" },
-  matrixGrid: { display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: "4px", width: "260px" },
-  matrixBox: { width: "18px", height: "22px", borderRadius: "3px", display: "flex", alignItems: "center", justifyContent: "center" },
-  matrixText: { fontSize: "10px", fontWeight: "700", color: "#fff" },
-  arrowIcon: { fontSize: "16px", color: "#cbd5e1", fontWeight: "bold" },
-  
-  // Person View Modal Styles
-  modalOverlay: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(15, 23, 42, 0.6)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000 },
-  personViewModal: { backgroundColor: "#fff", borderRadius: "12px", width: "720px", maxWidth: "95%", maxHeight: "90vh", overflowY: "auto", padding: "24px", display: "flex", flexDirection: "column", gap: "16px" },
-  personHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", paddingBottom: "12px", borderBottom: "1px solid #e2e8f0" },
-  closeBtn: { background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "#64748b" },
-  progressCard: { backgroundColor: "#f8fafc", padding: "12px 16px", borderRadius: "8px", border: "1px solid #e2e8f0" },
-  progressBarTrack: { backgroundColor: "#e2e8f0", height: "8px", borderRadius: "4px", overflow: "hidden" },
-  progressBarFill: { backgroundColor: "#2563eb", height: "100%", borderRadius: "4px", transition: "width 0.3s ease" },
-  personStatsRow: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "10px" },
-  personStatBox: { backgroundColor: "#f8fafc", padding: "10px 12px", borderRadius: "8px", border: "1px solid #e2e8f0", display: "flex", flexDirection: "column" },
-  personStatLabel: { fontSize: "10px", color: "#64748b", textTransform: "uppercase", fontWeight: "700" },
-  personStatValue: { fontSize: "15px", fontWeight: "800", color: "#0f172a", marginTop: "2px" },
-  personStatSubText: { fontSize: "10px", color: "#94a3b8", marginTop: "2px" },
-  sectionCard: { backgroundColor: "#fff", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "16px" },
-  
-  // Calendar Styles
-  calendarGridContainer: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" },
-  calendarMonthCard: { backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "10px" },
-  calendarMonthTitle: { fontSize: "12px", fontWeight: "700", color: "#0f172a", marginBottom: "8px", textAlign: "center" },
-  calendarHeaderRow: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "2px", marginBottom: "4px" },
-  calendarHeaderCell: { fontSize: "9px", fontWeight: "700", color: "#64748b", textAlign: "center" },
-  calendarDaysGrid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "2px" },
-  calendarDayEmpty: { height: "26px" },
-  calendarDayCell: { position: "relative", height: "26px", borderRadius: "3px", backgroundColor: "#fff", border: "1px solid #e2e8f0", fontSize: "10px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#475569" },
-  calendarDayVisited: { backgroundColor: "#22c55e", color: "#fff", fontWeight: "bold", border: "none" },
-  calendarDayToday: { border: "2px solid #2563eb", fontWeight: "bold" },
-  calendarWeekBadge: { position: "absolute", top: "1px", left: "2px", fontSize: "7px", fontWeight: "800", color: "#2563eb", backgroundColor: "#eff6ff", borderRadius: "2px", padding: "0 2px" },
-
-  // Tabs System Styles
-  tabHeaderBar: { display: "flex", gap: "6px", borderBottom: "1px solid #e2e8f0", paddingBottom: "10px", marginBottom: "12px", overflowX: "auto" },
-  tabBtn: { padding: "6px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", backgroundColor: "#f8fafc", color: "#475569", fontSize: "12px", fontWeight: "600", cursor: "pointer", whiteSpace: "nowrap" },
-  tabBtnActive: { padding: "6px 12px", borderRadius: "6px", border: "none", backgroundColor: "#2563eb", color: "#ffffff", fontSize: "12px", fontWeight: "700", cursor: "pointer", whiteSpace: "nowrap" },
-
-  scanBoxDone: { flex: 1, backgroundColor: "#dcfce7", color: "#15803d", border: "1px solid #86efac", padding: "10px", borderRadius: "6px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px", fontWeight: "600", fontSize: "13px" },
-  scanBoxPending: { flex: 1, backgroundColor: "#f8fafc", color: "#64748b", border: "1px solid #cbd5e1", padding: "10px", borderRadius: "6px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px", fontWeight: "500", fontSize: "13px" },
-  historyLogList: { maxHeight: "180px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px" },
-  historyLogItem: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", backgroundColor: "#f8fafc", borderRadius: "6px", border: "1px solid #f1f5f9" },
-  weekPill: { backgroundColor: "#e0e7ff", color: "#3730a3", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: "700" },
-  deleteLogBtn: { background: "none", border: "none", cursor: "pointer", fontSize: "14px", padding: "2px 4px", opacity: 0.8 },
-  manualCheckInBtn: { backgroundColor: "#16a34a", color: "#fff", border: "none", padding: "6px 12px", borderRadius: "6px", fontSize: "12px", fontWeight: "600", cursor: "pointer" },
-  secondaryBtn: { backgroundColor: "#f1f5f9", color: "#334155", border: "1px solid #cbd5e1", padding: "6px 12px", borderRadius: "6px", fontSize: "12px", cursor: "pointer" },
-  deleteBtn: { backgroundColor: "#ef4444", color: "#fff", border: "none", padding: "8px 14px", borderRadius: "6px", fontSize: "12px", fontWeight: "600", cursor: "pointer" },
-  formGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" },
-  form: { display: "flex", flexDirection: "column", gap: "10px" },
-  label: { fontSize: "11px", fontWeight: "600", color: "#475569" },
-  input: { padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", width: "100%", boxSizing: "border-box" },
-  modalContent: { backgroundColor: "#fff", padding: "24px", borderRadius: "12px", width: "420px", maxWidth: "90%" },
-  modalActions: { display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "16px" },
-  saveBtn: { padding: "8px 16px", borderRadius: "6px", backgroundColor: "#2563eb", color: "#fff", border: "none", cursor: "pointer", fontWeight: "600" },
-  cancelBtn: { padding: "8px 16px", borderRadius: "6px", backgroundColor: "#e2e8f0", color: "#334155", border: "none", cursor: "pointer" }
-};
