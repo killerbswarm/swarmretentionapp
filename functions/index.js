@@ -979,3 +979,63 @@ exports.runAtRiskScan = onRequest(
     }
   }
 );
+
+exports.getInBodyScans = onRequest({ cors: true }, async (req, res) => {
+  try {
+    const email = String(req.query.email || req.body?.email || "")
+      .toLowerCase()
+      .trim();
+    const phone = String(req.query.phone || req.body?.phone || "").replace(/\D/g, "");
+    const last10 = phone.length >= 10 ? phone.slice(-10) : phone;
+
+    if (!email && last10.length < 7) {
+      return res.status(400).json({ error: "Need email or phone" });
+    }
+
+    const seen = new Set();
+    const scans = [];
+
+    const addSnap = (snap) => {
+      snap.docs.forEach((d) => {
+        if (seen.has(d.id)) return;
+        seen.add(d.id);
+        const data = d.data() || {};
+        scans.push({
+          id: d.id,
+          scanDate: data.scanDate || data.date || null,
+          clientName: data.clientName || "",
+          email: data.email || "",
+          phone: data.phone || "",
+          weight: data.weight || 0,
+          smm: data.smm || 0,
+          pbf: data.pbf || 0,
+          bmi: data.bmi || 0,
+          bfm: data.bfm || 0,
+          lbm: data.lbm || 0,
+          bmr: data.bmr || 0,
+          score: data.score || 0,
+          visceralFat: data.visceralFat || 0,
+          height: data.height || 0,
+          age: data.age || 0,
+          gender: data.gender || "",
+          segmentalLean: data.segmentalLean || null,
+          segmentalFat: data.segmentalFat || null,
+        });
+      });
+    };
+
+    if (email) {
+      addSnap(await db.collection("inbody_scans").where("email", "==", email).get());
+    }
+    if (last10.length >= 7) {
+      addSnap(await db.collection("inbody_scans").where("phone", "==", last10).get());
+      addSnap(await db.collection("inbody_scans").where("phone", "==", phone).get());
+    }
+
+    scans.sort((a, b) => String(b.scanDate || "").localeCompare(String(a.scanDate || "")));
+    return res.status(200).json({ scans });
+  } catch (err) {
+    console.error("getInBodyScans", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
