@@ -569,6 +569,81 @@ exports.ghlAtRiskCheckInWebhook = onRequest(
   }
 );
 
+async function removeFromAtRisk({ email, ghlContactId, phone }) {
+  const ids = new Set();
+  if (email) ids.add(String(email).replace(/[^a-zA-Z0-9]/g, "_").toLowerCase());
+  if (ghlContactId) ids.add(String(ghlContactId));
+  if (phone) ids.add(`phone_${String(phone).replace(/\D/g, "")}`);
+
+  let removed = 0;
+  for (const id of ids) {
+    const ref = db.collection("atRiskMembers").doc(id);
+    const snap = await ref.get();
+    if (snap.exists) {
+      await ref.delete();
+      removed++;
+    }
+  }
+
+  if (email) {
+    const q = await db.collection("atRiskMembers").where("email", "==", String(email).toLowerCase()).get();
+    for (const d of q.docs) {
+      await d.ref.delete();
+      removed++;
+    }
+  }
+
+  return removed;
+}
+
+exports.ghlPendingCancelWebhook = onRequest(
+  { cors: true },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
+
+      const payload = req.body || {};
+      const email = String(payload.email || payload.contact?.email || "").trim().toLowerCase();
+      const ghlContactId = payload.contact_id || payload.contactId || payload.contact?.id || payload.id || null;
+      const phone = payload.phone || payload.contact?.phone || "";
+      const firstName = payload.first_name || payload.firstName || payload.contact?.firstName || "";
+      const lastName = payload.last_name || payload.lastName || payload.contact?.lastName || "";
+
+      if (!email && !ghlContactId && !phone) {
+        return res.status(400).json({ error: "Need at least email, phone, or contact_id" });
+      }
+
+      const removed = await removeFromAtRisk({ email, ghlContactId, phone });
+
+      if (email) {
+        const memberId = email.replace(/[^a-zA-Z0-9]/g, "_");
+        await db.collection("members").doc(memberId).set({
+          email,
+          firstName,
+          lastName,
+          phone,
+          ghlContactId: ghlContactId || null,
+          status: "pendingCancel",
+          pendingCancelAt: new Date(),
+          updatedAt: new Date()
+        }, { merge: true });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: removed
+          ? `Removed from At Risk (${removed} record${removed === 1 ? "" : "s"})`
+          : "Not in At Risk list — marked pending cancel so they will not be re-added",
+        email,
+        removed
+      });
+    } catch (err) {
+      console.error("Pending Cancel Webhook Error:", err);
+      return res.status(500).json({ error: "Internal Server Error", details: err.message });
+    }
+  }
+);
+
 // =========================================================================
 // ENDPOINT: Send Internal Comment (shows in conversation feed, not SMS)
 // =========================================================================
@@ -642,10 +717,12 @@ function normalizeTags(tags) {
   return list
     .map((t) => {
       let s = String(t).toLowerCase().trim();
-      // canonicalize common variants to our exact names
       if (s === "drop in" || s === "dropin" || s === "drop_in") s = "drop-in";
       if (s === "punch card") s = "punchcard";
       if (s === "pause") s = "paused";
+      if (s === "pending cancel" || s === "pending cancellation" || s === "pending-cancellation") s = "pending-cancel";
+      if (s === "no membership" || s === "no-membership" || s === "nonmember" || s === "non-member") s = "nomembership";
+      if (s === "former member" || s === "formermember" || s === "ex-member" || s === "ex member") s = "former-member";
       return s;
     })
     .filter(Boolean);
@@ -690,24 +767,15 @@ async function getGhlTagsForEmail(email, token, locationId) {
  *  - member + punchcard → exclude
  */
 function isEligibleMemberForAtRisk(tags) {
-  // Exact GHL tags: member | drop-in | punchcard | paused
   if (!tags || !tags.length) return false;
   if (!hasTag(tags, "member")) return false;
-  if (hasTag(tags, "punchcard")) return false;
-  if (hasTag(tags, "paused")) return false;
-  if (hasTag(tags, "drop-in")) return false;
+  if (hasTag(tags, "punchcard", "paused", "drop-in")) return false;
+  if (hasTag(tags, "pending-cancel", "cancelled", "canceled", "cancel")) return false;
+  if (hasTag(tags, "nomembership", "inactive", "former-member")) return false;
   return true;
 }
 
-exports.dailyAtRiskFromCheckins = onSchedule(
-  {
-    schedule: "0 7 * * *",
-    timeZone: "America/New_York",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    secrets: [GHL_API_TOKEN, GHL_LOCATION_ID]
-  },
-  async (event) => {
+async function executeAtRiskScan() {
     const now = new Date();
     const todayKey = [
       now.getFullYear(),
@@ -787,6 +855,21 @@ exports.dailyAtRiskFromCheckins = onSchedule(
     let added = 0;
     let skipped = 0;
     let excludedByTag = 0;
+    let removedByTag = 0;
+
+    for (const d of atRiskSnap.docs) {
+      const email = (d.data().email || "").toLowerCase().trim();
+      if (!email) continue;
+      const tags = await getGhlTagsForEmail(email, token, locationId);
+      if (!isEligibleMemberForAtRisk(tags)) {
+        await d.ref.delete();
+        alreadyAtRisk.delete(email);
+        alreadyAtRisk.delete(d.id);
+        removedByTag++;
+        console.log(`Removed ${email} from at-risk: tags=[${(tags || []).join(", ")}]`);
+      }
+    }
+    console.log(`Removed ${removedByTag} at-risk members by GHL tags`);
 
     for (const docSnap of membersSnap.docs) {
       const m = docSnap.data();
@@ -795,7 +878,7 @@ exports.dailyAtRiskFromCheckins = onSchedule(
         skipped++;
         continue;
       }
-      if (m.status === "cancelled" || m.status === "graduated" || m.status === "pending") {
+      if (m.status === "cancelled" || m.status === "graduated" || m.status === "pending" || m.status === "pendingCancel") {
         skipped++;
         continue;
       }
@@ -860,8 +943,39 @@ exports.dailyAtRiskFromCheckins = onSchedule(
     }
 
     console.log(
-      `dailyAtRiskFromCheckins done. added=${added} skipped=${skipped} excludedByTag=${excludedByTag}`
+      `dailyAtRiskFromCheckins done. added=${added} removedByTag=${removedByTag} skipped=${skipped} excludedByTag=${excludedByTag}`
     );
-    return { added, skipped, excludedByTag, date: todayKey };
+    return { added, removedByTag, skipped, excludedByTag, date: todayKey };
+}
+
+exports.dailyAtRiskFromCheckins = onSchedule(
+  {
+    schedule: "0 7 * * *",
+    timeZone: "America/New_York",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    secrets: [GHL_API_TOKEN, GHL_LOCATION_ID]
+  },
+  async () => {
+    await executeAtRiskScan();
+  }
+);
+
+exports.runAtRiskScan = onRequest(
+  {
+    cors: true,
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    secrets: [GHL_API_TOKEN, GHL_LOCATION_ID]
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
+      const result = await executeAtRiskScan();
+      return res.status(200).json({ success: true, ...(result || {}) });
+    } catch (err) {
+      console.error("runAtRiskScan error:", err);
+      return res.status(500).json({ error: err.message });
+    }
   }
 );

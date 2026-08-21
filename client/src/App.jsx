@@ -109,10 +109,12 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
   const [showAddModal, setShowAddModal] = useState(false);
   const [atRiskMembers, setAtRiskMembers] = useState([]);
-  const [mainTab, setMainTab] = useState("twelve_week"); // "twelve_week" | "at_risk"
+  const [mainTab, setMainTab] = useState("twelve_week"); // "twelve_week" | "at_risk" | "settings"
   const [selectedAtRiskMember, setSelectedAtRiskMember] = useState(null);
   const [showAddAtRiskModal, setShowAddAtRiskModal] = useState(false);
   const [sendAsInternal, setSendAsInternal] = useState(false);
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanMsg, setScanMsg] = useState("");
 
   // Person View Modal State
   const [selectedMember, setSelectedMember] = useState(null);
@@ -252,6 +254,26 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
     await signOut(auth);
     setIsAuthenticated(false);
     setPasswordInput("");
+  };
+
+  const runAtRiskScanNow = async () => {
+    setScanBusy(true);
+    setScanMsg("");
+    try {
+      const res = await fetch(
+        "https://us-central1-swarm-12-week-startup.cloudfunctions.net/runAtRiskScan",
+        { method: "POST" }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Scan failed");
+      setScanMsg(
+        `Done. Removed ${data.removedByTag || 0} by tags, added ${data.added || 0}.`
+      );
+    } catch (err) {
+      setScanMsg(err.message);
+    } finally {
+      setScanBusy(false);
+    }
   };
 
   // Real-time Firestore sync for Members
@@ -1327,17 +1349,26 @@ const handleAddManualCheckIn = async (dateKey) => {
           padding-left: 16px;
           padding-right: 16px;
         }
-        .ret-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
-        .ret-title { font-size: 24px; font-weight: 800; color: #0f172a; margin: 0; }
-        .ret-sub { font-size: 13px; color: #64748b; margin: 4px 0 0; }
+        .ret-top { display: flex; align-items: center; gap: 16px; margin: 0 0 20px; padding: 12px 14px; background: #0f172a; border-radius: 16px; color: #f8fafc; }
+        .ret-brand { display: flex; align-items: center; gap: 10px; min-width: 180px; }
+        .ret-mark { width: 36px; height: 36px; border-radius: 10px; background: #f59e0b; color: #111827; font-weight: 900; font-size: 13px; display: flex; align-items: center; justify-content: center; letter-spacing: 0.04em; }
+        .ret-title { font-size: 16px; font-weight: 800; margin: 0; color: #fff; line-height: 1.1; }
+        .ret-nav { display: flex; gap: 6px; flex: 1; justify-content: center; }
+        .ret-tab { border: none; background: transparent; color: #94a3b8; font-weight: 700; font-size: 13px; padding: 8px 12px; border-radius: 999px; cursor: pointer; }
+        .ret-tab.on { background: #f59e0b; color: #111827; }
+        .ret-count { margin-left: 6px; font-size: 11px; opacity: 0.8; }
         .ret-actions { display: flex; gap: 8px; flex-shrink: 0; }
+        .ret-settings { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 20px; max-width: 520px; }
+        .ret-settings h2 { margin: 0 0 6px; font-size: 18px; }
+        .ret-settings p { margin: 0 0 14px; color: #64748b; font-size: 13px; }
+        .ret-scan-msg { margin-top: 12px; font-size: 13px; color: #0f172a; }
         .tw-cards { display: none; }
         .ar-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
         @media (max-width: 768px) {
-          .ret-header { align-items: center; flex-wrap: wrap; }
+          .ret-top { flex-wrap: wrap; }
+          .ret-nav { order: 3; width: 100%; justify-content: flex-start; }
           .ret-actions { margin-left: auto; }
-          .ret-title { font-size: 20px; line-height: 1.1; }
-          .ret-sub { display: none; }
+          .ret-title { font-size: 15px; line-height: 1.1; }
           .ret-actions button { padding: 8px 10px !important; font-size: 12px !important; }
           .tw-table { display: none !important; }
           .tw-cards { display: block; }
@@ -1375,14 +1406,39 @@ const handleAddManualCheckIn = async (dateKey) => {
           }
         }
       `}</style>
-<div className="ret-header">
-  <div>
-    <h1 className="ret-title">Swarm Retention</h1>
-    <AppVersion />
-    <p className="ret-sub">
-      Click any member to view stats, check-ins, and dates
-    </p>
+<header className="ret-top">
+  <div className="ret-brand">
+    <div className="ret-mark">SR</div>
+    <div>
+      <h1 className="ret-title">Swarm Retention</h1>
+      <AppVersion />
+    </div>
   </div>
+
+  <nav className="ret-nav">
+    <button
+      type="button"
+      className={mainTab === "twelve_week" ? "ret-tab on" : "ret-tab"}
+      onClick={() => { setMainTab("twelve_week"); setFilter("all"); }}
+    >
+      12-Week
+    </button>
+    <button
+      type="button"
+      className={mainTab === "at_risk" ? "ret-tab on" : "ret-tab"}
+      onClick={() => setMainTab("at_risk")}
+    >
+      At Risk
+      <span className="ret-count">{atRiskMembers.length}</span>
+    </button>
+    <button
+      type="button"
+      className={mainTab === "settings" ? "ret-tab on" : "ret-tab"}
+      onClick={() => setMainTab("settings")}
+    >
+      Settings
+    </button>
+  </nav>
 
   <div className="ret-actions">
     {mainTab === "twelve_week" && (
@@ -1390,38 +1446,35 @@ const handleAddManualCheckIn = async (dateKey) => {
         + Add
       </button>
     )}
-
     {mainTab === "at_risk" && (
       <button style={styles.addBtn} onClick={() => setShowAddAtRiskModal(true)}>
         + Add
       </button>
     )}
-
     <button style={styles.logoutBtn} onClick={handleLogout}>
       Logout
     </button>
   </div>
-</div>
+</header>
 
-{/* Main Tabs */}
-<div style={{ display: "flex", gap: "8px", marginBottom: "16px", flexWrap: "wrap" }}>
-  <button
-    onClick={() => {
-      setMainTab("twelve_week");
-      setFilter("all");
-    }}
-    style={mainTab === "twelve_week" ? styles.activeFilterBtn : styles.filterBtn}
-  >
-    12-Week Onboarding
-  </button>
-
-  <button
-    onClick={() => setMainTab("at_risk")}
-    style={mainTab === "at_risk" ? styles.activeFilterBtn : styles.filterBtn}
-  >
-    ⚠️ At Risk ({atRiskMembers.length})
-  </button>
-</div>
+{mainTab === "settings" && (
+  <div className="ret-settings">
+    <h2>At-risk scan</h2>
+    <p>
+      Same job that runs every night at 7am. Checks GHL tags and removes
+      pending cancel, cancelled, inactive, nomembership, and former members.
+    </p>
+    <button
+      type="button"
+      disabled={scanBusy}
+      onClick={runAtRiskScanNow}
+      style={styles.addBtn}
+    >
+      {scanBusy ? "Scanning…" : "Scan at-risk now"}
+    </button>
+    {scanMsg && <p className="ret-scan-msg">{scanMsg}</p>}
+  </div>
+)}
 
 
 {/* ===== 12-WEEK VIEW ===== */}
