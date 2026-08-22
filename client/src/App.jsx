@@ -24,7 +24,11 @@ import {
   calculateWeekFromDate, 
   getMemberRiskInfo,
   localNoonFromStart,
-  localDaysSinceStart, 
+  localDaysSinceStart,
+  weekNumberForClassDate,
+  getWeekDateRange as helperGetWeekDateRange,
+  programWeek1Monday,
+  programEndSunday,
   generateThreeMonthCalendar 
 } from "./utils/helpers";
 
@@ -72,18 +76,11 @@ function timestampFromClass(classDate, classTime) {
   return `${classDate}T${String(t.h).padStart(2, "0")}:${String(t.m).padStart(2, "0")}:00`;
 }
 
-function weekNumberFromStart(startDateStr, classDate) {
-  if (!startDateStr || !classDate) return null;
-  const start = new Date(startDateStr);
-  const day = new Date(`${classDate}T12:00:00`);
-  if (isNaN(start) || isNaN(day)) return null;
-  start.setHours(0, 0, 0, 0);
-  const diffDays = Math.floor((day - start) / (1000 * 60 * 60 * 24));
-  if (diffDays < 0) return 1;
-  return Math.min(12, Math.max(1, Math.floor(diffDays / 7) + 1));
+function weekNumberFromStart(startDateStr, classDate, weekStartDay = 0) {
+  return weekNumberForClassDate(startDateStr, classDate, weekStartDay);
 }
 
-function mapMasterCheckin(c, startDateStr) {
+function mapMasterCheckin(c, startDateStr, weekStartDay = 0) {
   const classDate = c.classDate || null;
   return {
     id: c.id,
@@ -93,7 +90,7 @@ function mapMasterCheckin(c, startDateStr) {
     classTime: c.classTime,
     totalAttendanceCount: c.totalAttendanceCount,
     timestamp: timestampFromClass(classDate, c.classTime),
-    weekNumber: weekNumberFromStart(startDateStr, classDate),
+    weekNumber: weekNumberFromStart(startDateStr, classDate, weekStartDay),
     source: "swarm-checkins",
     _dateKey: classDate
   };
@@ -120,6 +117,15 @@ export default function App() {
   const [sendAsInternal, setSendAsInternal] = useState(false);
   const [scanBusy, setScanBusy] = useState(false);
   const [scanMsg, setScanMsg] = useState("");
+  const [weekStartDay, setWeekStartDay] = useState(() => {
+    const v = localStorage.getItem("ret_weekStartDay");
+    const n = v != null ? Number(v) : 1; // default Monday
+    return Number.isFinite(n) && n >= 0 && n <= 6 ? n : 1;
+  });
+
+  useEffect(() => {
+    localStorage.setItem("ret_weekStartDay", String(weekStartDay));
+  }, [weekStartDay]);
   const [darkMode, setDarkMode] = useState(() => {
     try { return localStorage.getItem("swarm_retention_theme") === "dark"; } catch { return false; }
   });
@@ -395,7 +401,7 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
           if (res.ok) {
             const data = await res.json();
             masterHistory = (data.checkins || []).map(c =>
-              mapMasterCheckin(c, member.startDate)
+              mapMasterCheckin(c, member.startDate, weekStartDay)
             );
           }
         } catch (apiErr) {
@@ -588,7 +594,7 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
 
     const unsub = masterOnSnapshot(q, (snap) => {
       const masterHistory = snap.docs.map(d =>
-        mapMasterCheckin({ id: d.id, ...d.data() }, selectedMember.startDate)
+        mapMasterCheckin({ id: d.id, ...d.data() }, selectedMember.startDate, weekStartDay)
       );
 
       setMemberCheckIns(prev => {
@@ -924,7 +930,7 @@ const handleAddManualCheckIn = async (dateKey) => {
       newCount,
       selectedMember.startDate,
       selectedMember.status
-    );
+    , weekStartDay);
 
     await updateDoc(memberRef, {
       weeklyCheckIns: currentWeeklyCounts,
@@ -962,7 +968,7 @@ const handleAddManualCheckIn = async (dateKey) => {
         const newCount = Math.max(0, currentCount - 1);
         currentWeeklyCounts[weekNum] = newCount;
 
-        const riskInfo = getMemberRiskInfo(newCount, selectedMember.startDate, selectedMember.status);
+        const riskInfo = getMemberRiskInfo(newCount, selectedMember.startDate, selectedMember.status, weekStartDay);
 
         await updateDoc(doc(db, "members", selectedMember.id), {
           weeklyCheckIns: currentWeeklyCounts,
@@ -995,7 +1001,7 @@ const handleAddManualCheckIn = async (dateKey) => {
 
     let calculatedWeek = editFormData.currentWeek;
     if (newStartDate) {
-      calculatedWeek = calculateWeekFromDate(newStartDate);
+      calculatedWeek = calculateWeekFromDate(newStartDate, weekStartDay);
     }
 
     const updatedWeeklyCheckIns = {};
@@ -1004,7 +1010,7 @@ const handleAddManualCheckIn = async (dateKey) => {
     }
 
     const activeWeekCount = updatedWeeklyCheckIns[calculatedWeek] || 0;
-    const riskInfo = getMemberRiskInfo(activeWeekCount, newStartDate, editFormData.status);
+    const riskInfo = getMemberRiskInfo(activeWeekCount, newStartDate, editFormData.status, weekStartDay);
 
     let updates = {
       firstName: editFormData.firstName,
@@ -1084,7 +1090,7 @@ const handleAddManualCheckIn = async (dateKey) => {
       });
     } else {
       const start = new Date(newMember.startDate || Date.now());
-      const currentWeek = calculateWeekFromDate(start);
+      const currentWeek = calculateWeekFromDate(start, weekStartDay);
 
       const totalCheckIns = parseInt(newMember.totalCheckIns || 0, 10);
       const weeklyCheckIns = {};
@@ -1105,7 +1111,7 @@ const handleAddManualCheckIn = async (dateKey) => {
       }
 
       const activeCount = weeklyCheckIns[currentWeek] || 0;
-      const riskInfo = getMemberRiskInfo(activeCount, start.toISOString(), "active");
+      const riskInfo = getMemberRiskInfo(activeCount, start.toISOString(), "active", weekStartDay);
 
       await setDoc(doc(db, "members", memberId), {
         id: memberId,
@@ -1175,29 +1181,11 @@ const handleAddManualCheckIn = async (dateKey) => {
   // --- GLOBAL STATS CALCULATIONS ---
 
   function getOnboardingWeekNumber(startDateStr) {
-    if (!startDateStr) return 1;
-    const diffDays = localDaysSinceStart(startDateStr);
-    return Math.min(12, Math.max(1, Math.floor(diffDays / 7) + 1));
+    return calculateWeekFromDate(startDateStr, weekStartDay);
   }
 
   function getWeekDateRange(startDateStr, weekNum) {
-    const start = localNoonFromStart(startDateStr);
-    if (!start) return null;
-    const weekStart = new Date(start);
-    weekStart.setDate(weekStart.getDate() + (weekNum - 1) * 7);
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekEnd.getDate() + 6);
-    const startKey = [
-      weekStart.getFullYear(),
-      String(weekStart.getMonth() + 1).padStart(2, "0"),
-      String(weekStart.getDate()).padStart(2, "0")
-    ].join("-");
-    const endKey = [
-      weekEnd.getFullYear(),
-      String(weekEnd.getMonth() + 1).padStart(2, "0"),
-      String(weekEnd.getDate()).padStart(2, "0")
-    ].join("-");
-    return { startKey, endKey };
+    return helperGetWeekDateRange(startDateStr, weekNum, weekStartDay);
   }
 
   // All known visit dates for a member: master + local check_ins (unique)
@@ -1271,7 +1259,7 @@ const handleAddManualCheckIn = async (dateKey) => {
   const highRiskMembers = activeMembers.filter(m => {
     const masterWeek = getMasterWeekVisits(m);
     const currentWeekVisits = masterWeek != null ? masterWeek : (m.weeklyCheckIns?.[m.currentWeek] || 0);
-    const risk = getMemberRiskInfo(currentWeekVisits, m.startDate, m.status);
+    const risk = getMemberRiskInfo(currentWeekVisits, m.startDate, m.status, weekStartDay);
     return risk.level === "high";
   });
   
@@ -1358,7 +1346,7 @@ const handleAddManualCheckIn = async (dateKey) => {
     const scanPct = Math.round((scansCompleted / 3) * 100);
 
     const currentWkVisits = getWeekVisitCount(selectedMember, activeWeeks);
-    const riskInfo = getMemberRiskInfo(currentWkVisits, selectedMember.startDate, selectedMember.status);
+    const riskInfo = getMemberRiskInfo(currentWkVisits, selectedMember.startDate, selectedMember.status, weekStartDay);
 
     const lastCheckInFormatted = selectedMember.lastCheckIn 
       ? new Date(selectedMember.lastCheckIn).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) 
@@ -1545,6 +1533,8 @@ const handleAddManualCheckIn = async (dateKey) => {
 
 {mainTab === "settings" && (
   <SettingsView
+    weekStartDay={weekStartDay}
+    setWeekStartDay={setWeekStartDay}
     styles={themeStyles}
     darkMode={darkMode}
     setDarkMode={setDarkMode}
@@ -1556,6 +1546,7 @@ const handleAddManualCheckIn = async (dateKey) => {
 
 {mainTab === "twelve_week" && (
   <TwelveWeekView
+          weekStartDay={weekStartDay}
     styles={themeStyles}
     members={members}
     filter={filter}
@@ -1591,6 +1582,7 @@ const handleAddManualCheckIn = async (dateKey) => {
 {/* --- PERSON VIEW MODAL --- */}
    {selectedMember && (
   <MemberDetailModal
+    weekStartDay={weekStartDay}
     selectedMember={selectedMember}
     personStats={personStats}
     memberCheckIns={memberCheckIns}

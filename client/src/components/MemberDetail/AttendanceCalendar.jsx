@@ -1,14 +1,5 @@
 import React, { useState } from "react";
-
-function localNoonFromStart(start) {
-  if (!start) return null;
-  const s = String(start);
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
-  const d = new Date(start);
-  if (isNaN(d.getTime())) return null;
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0);
-}
+import { programWeek1Monday, weekNumberForClassDate } from "../../utils/helpers";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -54,7 +45,8 @@ export default function AttendanceCalendar({
   checkInDatesSet,
   memberCheckIns = [],
   onAddCheckIn,
-  onDeleteLog
+  onDeleteLog,
+  weekStartDay = 0,
 }) {
   const now = new Date();
   const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1));
@@ -147,13 +139,17 @@ export default function AttendanceCalendar({
 
           let weekBadgeLabel = null;
           if (selectedMember.startDate) {
-            const startLocal = localNoonFromStart(selectedMember.startDate);
-            if (startLocal) {
-              const cellLocal = new Date(year, month, dayNum, 12, 0, 0);
-              const diffDays = Math.round((cellLocal - startLocal) / (1000 * 60 * 60 * 24));
-              if (diffDays >= 0 && diffDays < 84 && diffDays % 7 === 0) {
-                weekBadgeLabel = "W" + (Math.floor(diffDays / 7) + 1);
-              }
+            const cellLocal = new Date(year, month, dayNum, 12, 0, 0);
+            // Badge on Sundays that start a program week (W1–W12)
+            if (cellLocal.getDay() === Number(weekStartDay)) {
+              const dateKeyCell =
+                year +
+                "-" +
+                String(month + 1).padStart(2, "0") +
+                "-" +
+                String(dayNum).padStart(2, "0");
+              const wn = weekNumberForClassDate(selectedMember.startDate, dateKeyCell, weekStartDay);
+              if (wn && wn >= 1 && wn <= 12) weekBadgeLabel = "W" + wn;
             }
           }
 

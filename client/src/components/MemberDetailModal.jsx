@@ -5,6 +5,7 @@ import MemberHeader from "./MemberDetail/MemberHeader";
 import MemberTabs from "./MemberDetail/MemberTabs";
 
 export default function MemberDetailModal(props) {
+  const weekStartDay = props.weekStartDay ?? 0;
   const {
     selectedMember,
     personStats,
@@ -88,6 +89,7 @@ export default function MemberDetailModal(props) {
           onDeleteLog={onDeleteLog}
           onAddNote={onAddNote}
           onSendSms={onSendSms}
+          weekStartDay={weekStartDay}
           onMessagesChange={onMessagesChange}
           smsFile={smsFile}
           setSmsFile={setSmsFile}

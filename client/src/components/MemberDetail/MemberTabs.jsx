@@ -35,6 +35,7 @@ export default function MemberTabs({
   onAddNote,
   onSendSms,
   onMessagesChange,
+  weekStartDay = 0,
   smsFile,
   setSmsFile,
   smsFilePreview,
@@ -306,6 +307,7 @@ export default function MemberTabs({
       }}>
       {activeTab === "calendar" && (
         <AttendanceCalendar
+          weekStartDay={weekStartDay}
           selectedMember={selectedMember}
           threeMonthCalendars={threeMonthCalendars}
           checkInDatesSet={checkInDatesSet}

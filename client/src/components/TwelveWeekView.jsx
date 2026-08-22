@@ -2,6 +2,7 @@ import React from "react";
 import { getMemberRiskInfo } from "../utils/helpers";
 
 export default function TwelveWeekView({
+  weekStartDay = 0,
   styles,
   members,
   filter,
@@ -109,7 +110,7 @@ export default function TwelveWeekView({
               const isPending = member.status === "pending";
               const masterWeek = !isPending ? getMasterWeekVisits(member) : null;
               const thisWeekVisits = isPending ? 0 : (masterWeek != null ? masterWeek : (member.weeklyCheckIns?.[member.currentWeek] || 0));
-              const risk = getMemberRiskInfo(thisWeekVisits, member.startDate, member.status);
+              const risk = getMemberRiskInfo(thisWeekVisits, member.startDate, member.status, weekStartDay);
               const scans = member.inBodyScans || { scan1: false, scan2: false, scan3: false };
               const scanCount = (scans.scan1 ? 1 : 0) + (scans.scan2 ? 1 : 0) + (scans.scan3 ? 1 : 0);
 
@@ -178,17 +179,16 @@ export default function TwelveWeekView({
 
                           let bg = "#e5e7eb";
                           let titleExtra = "";
-                          if (isCurrent) {
-                            // Pace-aware: 1 visit early in the week is still on track
-                            const risk = getMemberRiskInfo(count, member.startDate, member.status);
-                            if (risk.level === "low") bg = "#22c55e";
-                            else if (risk.level === "medium") bg = "#f59e0b";
-                            else if (risk.level === "high") bg = "#ef4444";
-                            titleExtra = ` · ${risk.label}`;
-                          } else if (count >= 3) bg = "#22c55e";
+                          // Same visit-count colors for every week (including current)
+                          if (count >= 3) bg = "#22c55e";
                           else if (count === 2) bg = "#f59e0b";
                           else if (count === 1) bg = "#ef4444";
                           else if (weekNum < todayWeek && count === 0) bg = "#9ca3af";
+                          else if (isCurrent && count === 0) bg = "#fef3c7"; // current week, no visits yet
+                          if (isCurrent) {
+                            const risk = getMemberRiskInfo(count, member.startDate, member.status, weekStartDay);
+                            titleExtra = ` · ${risk.label}`;
+                          }
 
                           return (
                             <div 
@@ -226,7 +226,7 @@ export default function TwelveWeekView({
           const isPending = member.status === "pending";
           const masterWeek = !isPending ? getMasterWeekVisits(member) : null;
           const thisWeekVisits = isPending ? 0 : (masterWeek != null ? masterWeek : (member.weeklyCheckIns?.[member.currentWeek] || 0));
-          const risk = getMemberRiskInfo(thisWeekVisits, member.startDate, member.status);
+          const risk = getMemberRiskInfo(thisWeekVisits, member.startDate, member.status, weekStartDay);
           const scans = member.inBodyScans || { scan1: false, scan2: false, scan3: false };
           const scanCount = (scans.scan1 ? 1 : 0) + (scans.scan2 ? 1 : 0) + (scans.scan3 ? 1 : 0);
           const weekLabel = isPending ? "Pending" : `Week ${getOnboardingWeekNumber(member.startDate) || member.currentWeek}`;
@@ -269,13 +269,11 @@ export default function TwelveWeekView({
                     const todayWeek = getOnboardingWeekNumber(member.startDate);
                     const isCurrent = weekNum === todayWeek;
                     let bg = "#e5e7eb";
-                    if (isCurrent) {
-                      const r = getMemberRiskInfo(count, member.startDate, member.status);
-                      bg = r.level === "low" ? "#22c55e" : r.level === "medium" ? "#f59e0b" : "#ef4444";
-                    } else if (count >= 3) bg = "#22c55e";
+                    if (count >= 3) bg = "#22c55e";
                     else if (count === 2) bg = "#f59e0b";
                     else if (count === 1) bg = "#ef4444";
                     else if (weekNum < todayWeek && count === 0) bg = "#9ca3af";
+                    else if (isCurrent && count === 0) bg = "#fef3c7";
                     return (
                       <div key={weekNum} title={`Week ${weekNum}: ${count}`} style={{
                         height: 22, borderRadius: 4, background: bg, color: "#fff",
