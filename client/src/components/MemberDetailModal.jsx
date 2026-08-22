@@ -31,6 +31,7 @@ export default function MemberDetailModal(props) {
     onDeleteLog,
     onAddNote,
     onSendSms,
+    onMessagesChange,
     onSaveEdit,
     onDeleteMember,
     onToggleScan,
@@ -87,6 +88,7 @@ export default function MemberDetailModal(props) {
           onDeleteLog={onDeleteLog}
           onAddNote={onAddNote}
           onSendSms={onSendSms}
+          onMessagesChange={onMessagesChange}
           smsFile={smsFile}
           setSmsFile={setSmsFile}
           smsFilePreview={smsFilePreview}

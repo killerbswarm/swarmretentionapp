@@ -105,6 +105,7 @@ export default function App() {
   const [authChecking, setAuthChecking] = useState(true);
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordError, setPasswordError] = useState(false);
+  const [loginError, setLoginError] = useState("");
 
   // App Data State
   const [members, setMembers] = useState([]);
@@ -252,12 +253,19 @@ async function compressImage(file, maxWidth = 800, quality = 0.6) {
         sessionStorage.setItem("swarm_dashboard_auth", "true");
         setIsAuthenticated(true);
         setPasswordError(false);
+        setLoginError("");
       } catch (err) {
         console.error("Anonymous auth error:", err);
         setPasswordError(true);
+        setLoginError(
+          err.code === "auth/admin-restricted-operation"
+            ? "Anonymous sign-in is disabled for this Firebase project."
+            : err.message || "Login failed."
+        );
       }
     } else {
       setPasswordError(true);
+      setLoginError("Incorrect Password. Please try again.");
     }
   };
 
@@ -678,7 +686,7 @@ if (smsFile) {
   };
 
   // Handler: Send Outbound SMS via GHL
- const handleSendGhlSms = async (e) => {
+ const handleSendGhlSms = async (e, opts = {}) => {
   e.preventDefault();
   if (sendAsInternal) {
   if (!newSmsText.trim() || !ghlData.contactId) return;
@@ -757,23 +765,82 @@ if (smsFile) {
       body: JSON.stringify({
         contactId: ghlData.contactId,
         message: newSmsText.trim() || "",
-        attachments: attachments.length > 0 ? attachments : undefined
+        attachments: attachments.length > 0 ? attachments : undefined,
+        scheduledAt: opts.scheduledAt || undefined,
+        scheduledTimestamp: opts.scheduledTimestamp || undefined
       })
     });
 
     const data = await res.json();
 
     if (res.ok && data.success) {
+      const messageId = data.messageId || data.message?.id || null;
+      const whenIso = opts.scheduledTimestamp
+        ? new Date(opts.scheduledTimestamp * 1000).toISOString()
+        : opts.scheduledAt
+          ? new Date(opts.scheduledAt).toISOString()
+          : null;
+
+      if (whenIso) {
+        try {
+          const { addDoc, collection, serverTimestamp } = await import("firebase/firestore");
+          const refDoc = await addDoc(collection(db, "scheduled_sms"), {
+            contactId: String(ghlData.contactId),
+            memberId: selectedMember?.id || null,
+            messageId: messageId || null,
+            body: newSmsText.trim() || "",
+            scheduledFor: whenIso,
+            status: "scheduled",
+            createdAt: serverTimestamp(),
+          });
+          setGhlData((prev) => ({
+            ...prev,
+            messages: [
+              {
+                id: messageId || refDoc.id,
+                firestoreId: refDoc.id,
+                body: newSmsText.trim() || "",
+                direction: "outbound",
+                dateAdded: whenIso,
+                scheduledFor: whenIso,
+                status: "scheduled",
+              },
+              ...(prev.messages || []),
+            ],
+          }));
+        } catch (err) {
+          console.warn("scheduled_sms save", err);
+          setGhlData((prev) => ({
+            ...prev,
+            messages: [
+              {
+                id: messageId || `local-${Date.now()}`,
+                body: newSmsText.trim() || "",
+                direction: "outbound",
+                dateAdded: whenIso,
+                scheduledFor: whenIso,
+                status: "scheduled",
+              },
+              ...(prev.messages || []),
+            ],
+          }));
+        }
+      } else {
+        await fetchGhlDetails(selectedMember);
+      }
+
       setNewSmsText("");
       setSmsFile(null);
       setSmsFilePreview(null);
-      await fetchGhlDetails(selectedMember); // refresh conversation
+      if (opts.onDone) opts.onDone(whenIso ? "scheduled" : "sent");
     } else {
-      alert(`Failed to send SMS: ${data.error || "Check GHL SMS scopes"}`);
+      if (opts.onDone) opts.onDone("error", data.error || "Check GHL SMS scopes");
+      else alert(`Failed to send SMS: ${data.error || "Check GHL SMS scopes"}`);
     }
   } catch (err) {
     console.error("Error sending GHL SMS:", err);
-    alert("Error connecting to server or uploading image.");
+    if (opts.onDone) opts.onDone("error", "Error connecting to server or uploading image.");
+    else alert("Error connecting to server or uploading image.");
   } finally {
     setSendingSms(false);
   }
@@ -1099,6 +1166,7 @@ const handleAddManualCheckIn = async (dateKey) => {
       passwordInput={passwordInput}
       setPasswordInput={setPasswordInput}
       passwordError={passwordError}
+      loginError={loginError}
       onSubmit={handleLoginSubmit}
     />
   );
@@ -1548,6 +1616,7 @@ const handleAddManualCheckIn = async (dateKey) => {
     onDeleteLog={handleDeleteCheckIn}
     onAddNote={handleAddGhlNote}
     onSendSms={handleSendGhlSms}
+    onMessagesChange={(next) => setGhlData((p) => ({ ...p, messages: typeof next === "function" ? next(p.messages || []) : next }))}
     onSaveEdit={handleSavePersonEdits}
     onDeleteMember={handleDeleteMember}
     onToggleScan={handleToggleScan}

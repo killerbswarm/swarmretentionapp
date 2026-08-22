@@ -1,4 +1,13 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  deleteDoc,
+  doc,
+} from "firebase/firestore";
+import { db } from "../../firebase";
 import { stripHtml } from "../../utils/helpers";
 import AttendanceCalendar from "./AttendanceCalendar";
 import InBodyScans from "./InBodyScans";
@@ -25,6 +34,7 @@ export default function MemberTabs({
   onDeleteLog,
   onAddNote,
   onSendSms,
+  onMessagesChange,
   smsFile,
   setSmsFile,
   smsFilePreview,
@@ -41,6 +51,211 @@ export default function MemberTabs({
   onSaveEdit,
   onDeleteMember,
 }) {
+  const [scheduleAt, setScheduleAt] = useState("");
+  const [toast, setToast] = useState("");
+  const [confirmCancel, setConfirmCancel] = useState(null);
+
+  const showToast = (msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 3200);
+  };
+
+  const formatMsgTime = (dateVal) => {
+    if (!dateVal) return "";
+    try {
+      const d = new Date(dateVal);
+      if (isNaN(d.getTime())) return "";
+      return d.toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+    } catch {
+      return "";
+    }
+  };
+
+  // Merge pending scheduled SMS from Firestore
+  useEffect(() => {
+    const contactId = ghlData?.contactId;
+    if (!contactId || activeTab !== "messages") return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const q = query(
+          collection(db, "scheduled_sms"),
+          where("contactId", "==", String(contactId)),
+          where("status", "==", "scheduled")
+        );
+        const snap = await getDocs(q);
+        if (cancelled || !snap.size) return;
+        const pending = snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: data.messageId || d.id,
+            firestoreId: d.id,
+            body: data.body || data.message || "",
+            direction: "outbound",
+            dateAdded: data.scheduledFor,
+            scheduledFor: data.scheduledFor,
+            status: "scheduled",
+          };
+        });
+        if (typeof onMessagesChange === "function") {
+          const existing = ghlData.messages || [];
+          const ids = new Set(existing.map((m) => m.id).filter(Boolean));
+          const keys = new Set(
+            existing
+              .filter((m) => m.status === "scheduled")
+              .map((m) => `${m.body}|${m.scheduledFor}`)
+          );
+          const toAdd = pending.filter((p) => {
+            if (p.id && ids.has(p.id)) return false;
+            if (keys.has(`${p.body}|${p.scheduledFor}`)) return false;
+            // drop past schedules
+            if (p.scheduledFor && new Date(p.scheduledFor).getTime() <= Date.now()) return false;
+            return true;
+          });
+          if (toAdd.length) onMessagesChange([...toAdd, ...existing]);
+        }
+      } catch (err) {
+        console.warn("scheduled_sms load", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ghlData?.contactId, activeTab]);
+
+  // Flip scheduled → sent when time passes
+  useEffect(() => {
+    const msgs = ghlData?.messages || [];
+    const pending = msgs.filter(
+      (m) =>
+        (m.status === "scheduled" || m.scheduledFor) &&
+        m.scheduledFor &&
+        new Date(m.scheduledFor).getTime() > Date.now()
+    );
+    if (!pending.length || typeof onMessagesChange !== "function") return undefined;
+    const timers = pending.map((m) => {
+      const delay = Math.max(new Date(m.scheduledFor).getTime() - Date.now() + 1500, 1000);
+      return setTimeout(() => {
+        onMessagesChange(
+          (ghlData.messages || []).map((row) => {
+            if (row.id !== m.id && row.scheduledFor !== m.scheduledFor) return row;
+            return {
+              ...row,
+              status: "sent",
+              scheduledFor: null,
+              dateAdded: row.scheduledFor || row.dateAdded,
+            };
+          })
+        );
+      }, delay);
+    });
+    return () => timers.forEach(clearTimeout);
+  }, [ghlData?.messages]);
+
+  const requestCancelScheduled = (messageId) => {
+    if (!messageId) {
+      showToast("Missing message id — cancel in GHL if needed");
+      return;
+    }
+    setConfirmCancel(messageId);
+  };
+
+  const confirmCancelScheduled = async () => {
+    const messageId = confirmCancel;
+    if (!messageId) return;
+    setConfirmCancel(null);
+    try {
+      const res = await fetch(
+        "https://us-central1-swarm-12-week-startup.cloudfunctions.net/cancelScheduledGhlSms",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messageId }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      const errText = String(data.error || data.message || "");
+      const alreadyGone =
+        !res.ok &&
+        (/not found|does not exist|404|no longer|already|invalid/i.test(errText) ||
+          res.status === 404);
+
+      if (!res.ok && !alreadyGone && data.error) {
+        showToast(errText || "Cancel failed");
+        return;
+      }
+
+      const row = (ghlData.messages || []).find(
+        (m) => m.id === messageId || m.messageId === messageId
+      );
+      if (row?.firestoreId) {
+        try {
+          await deleteDoc(doc(db, "scheduled_sms", row.firestoreId));
+        } catch (err) {
+          console.warn(err);
+        }
+      } else {
+        try {
+          const q = query(
+            collection(db, "scheduled_sms"),
+            where("messageId", "==", String(messageId))
+          );
+          const snap = await getDocs(q);
+          await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
+        } catch (err) {
+          console.warn(err);
+        }
+      }
+
+      if (typeof onMessagesChange === "function") {
+        onMessagesChange(
+          (ghlData.messages || []).filter(
+            (m) => m.id !== messageId && m.messageId !== messageId
+          )
+        );
+      }
+      showToast(alreadyGone ? "Already gone in GHL — cleared from app" : "Scheduled message canceled");
+    } catch (e) {
+      showToast(e.message || "Cancel failed");
+    }
+  };
+
+  const handleSmsSubmit = (e) => {
+    e.preventDefault();
+    let scheduledTimestamp;
+    if (scheduleAt) {
+      const d = new Date(scheduleAt);
+      if (isNaN(d.getTime())) {
+        showToast("Invalid schedule time");
+        return;
+      }
+      scheduledTimestamp = Math.floor(d.getTime() / 1000);
+      if (scheduledTimestamp < Math.floor(Date.now() / 1000) + 90) {
+        showToast("Pick a time at least 2 minutes from now");
+        return;
+      }
+    }
+    onSendSms(e, {
+      scheduledAt: scheduleAt || undefined,
+      scheduledTimestamp,
+      onDone: (kind, err) => {
+        if (kind === "error") showToast(err || "Send failed");
+        else if (kind === "scheduled") {
+          showToast(`Scheduled for ${formatMsgTime(scheduleAt)}`);
+          setScheduleAt("");
+        } else {
+          showToast("Message sent");
+          setScheduleAt("");
+        }
+      },
+    });
+  };
+
   return (
     <div style={styles.sectionCard}>
       {/* Tab Buttons */}
@@ -160,14 +375,18 @@ export default function MemberTabs({
   }
   const isOutbound = msg.direction === "outbound";
   const attachments = msg.attachments || msg.meta?.attachments || [];
+  const scheduledForMs = msg.scheduledFor ? new Date(msg.scheduledFor).getTime() : 0;
+  const isScheduled =
+    scheduledForMs > Date.now() + 5000 &&
+    (msg.status === "scheduled" || !!msg.scheduledFor);
 
   return (
     <div
       key={msg.id || Math.random()}
       style={{
-        alignSelf: isOutbound ? "flex-end" : "flex-start",
-        backgroundColor: isOutbound ? "#2563eb" : "#f1f5f9",
-        color: isOutbound ? "#ffffff" : "#0f172a",
+        alignSelf: isOutbound || isScheduled ? "flex-end" : "flex-start",
+        backgroundColor: isScheduled ? "#f59e0b" : isOutbound ? "#2563eb" : "#f1f5f9",
+        color: isScheduled || isOutbound ? "#ffffff" : "#0f172a",
         padding: "8px 12px",
         borderRadius: "10px",
         maxWidth: "80%",
@@ -175,12 +394,15 @@ export default function MemberTabs({
         boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
       }}
     >
-      {/* Text */}
+      {isScheduled && (
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 4, fontSize: 10, fontWeight: 700 }}>
+          <span>Scheduled</span>
+          <span style={{ opacity: 0.9 }}>For {formatMsgTime(msg.scheduledFor)}</span>
+        </div>
+      )}
       {msg.body && (
         <div style={{ whiteSpace: "pre-wrap" }}>{msg.body}</div>
       )}
-
-      {/* Photos / Attachments */}
       {attachments.length > 0 && (
         <div style={{ marginTop: msg.body ? "8px" : "0", display: "flex", flexDirection: "column", gap: "6px" }}>
           {attachments.map((url, idx) => (
@@ -188,32 +410,39 @@ export default function MemberTabs({
               key={idx}
               src={typeof url === "string" ? url : url.url || url}
               alt="Attachment"
-              style={{
-                maxWidth: "100%",
-                borderRadius: "6px",
-                cursor: "pointer",
-              }}
+              style={{ maxWidth: "100%", borderRadius: "6px", cursor: "pointer" }}
               onClick={() => window.open(typeof url === "string" ? url : url.url || url, "_blank")}
             />
           ))}
         </div>
       )}
-
-      <div
-        style={{
-          fontSize: "9px",
-          opacity: 0.7,
-          marginTop: "4px",
-          textAlign: "right",
-        }}
-      >
-        {new Date(msg.dateAdded || msg.date).toLocaleString("en-US", {
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-        })}
-      </div>
+      {isScheduled ? (
+        <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 10, fontWeight: 600, opacity: 0.95 }}>Queued — will send at this time</span>
+          {(msg.id || msg.messageId) && (
+            <button
+              type="button"
+              onClick={() => requestCancelScheduled(msg.id || msg.messageId)}
+              style={{
+                border: "1px solid rgba(255,255,255,0.7)",
+                background: "rgba(0,0,0,0.15)",
+                color: "#fff",
+                fontSize: 10,
+                fontWeight: 700,
+                borderRadius: 6,
+                padding: "3px 8px",
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      ) : (
+        <div style={{ fontSize: "9px", opacity: 0.7, marginTop: "4px", textAlign: "right" }}>
+          {formatMsgTime(msg.dateAdded || msg.date)}
+        </div>
+      )}
     </div>
   );
 })}
@@ -223,7 +452,7 @@ export default function MemberTabs({
           {/* SMS Input */}
 {ghlData.contactId && (
   <form
-    onSubmit={onSendSms}
+    onSubmit={handleSmsSubmit}
     style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "12px" }}
   >
     <textarea
@@ -277,55 +506,110 @@ export default function MemberTabs({
       </div>
     )}
 
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-      {/* File picker */}
-      <label style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "6px",
-        padding: "6px 12px",
-        backgroundColor: "#f1f5f9",
-        border: "1px solid #cbd5e1",
-        borderRadius: "6px",
-        fontSize: "13px",
-        cursor: "pointer",
-        color: "#334155"
+    {scheduleAt && (
+      <div style={{
+        fontSize: 12, fontWeight: 600, color: "#92400e", background: "#fffbeb",
+        border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 10px",
+        display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
       }}>
-        📷 Add Photo
+        <span>Will send {formatMsgTime(scheduleAt)}</span>
+        <button type="button" onClick={() => setScheduleAt("")}
+          style={{ border: "none", background: "transparent", color: "#b45309", fontWeight: 700, cursor: "pointer", textDecoration: "underline", fontSize: 12 }}>
+          Clear
+        </button>
+      </div>
+    )}
+
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <label style={{
+          display: "inline-flex", alignItems: "center", gap: "6px", padding: "6px 12px",
+          backgroundColor: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: "6px",
+          fontSize: "13px", cursor: "pointer", color: "#334155"
+        }}>
+          📷 Add Photo
+          <input type="file" accept="image/*" style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                setSmsFile(file);
+                setSmsFilePreview(URL.createObjectURL(file));
+              }
+            }}
+          />
+        </label>
+        <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+          <input type="checkbox" checked={sendAsInternal} onChange={(e) => setSendAsInternal(e.target.checked)} />
+          Internal comment
+        </label>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <input
-          type="file"
-          accept="image/*"
-          style={{ display: "none" }}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) {
-              setSmsFile(file);
-              setSmsFilePreview(URL.createObjectURL(file));
-            }
+          type="datetime-local"
+          value={scheduleAt}
+          onChange={(e) => setScheduleAt(e.target.value)}
+          style={{
+            height: 36, border: "1px solid #cbd5e1", borderRadius: 8,
+            padding: "0 10px", fontSize: 13, color: "#0f172a", background: "#fff",
           }}
         />
-      </label>
-      <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
-    <input
-      type="checkbox"
-      checked={sendAsInternal}
-      onChange={(e) => setSendAsInternal(e.target.checked)}
-    />
-    Internal comment (not sent to member)
-  </label>
-      <button
-        type="submit"
-        disabled={sendingSms || (!newSmsText.trim() && !smsFile)}
-        style={{
-          ...styles.manualCheckInBtn,
-          opacity: sendingSms || (!newSmsText.trim() && !smsFile) ? 0.6 : 1,
-        }}
-      >
-        {sendingSms ? "Sending..." : "Send SMS"}
-      </button>
+        <button
+          type="submit"
+          disabled={sendingSms || (!newSmsText.trim() && !smsFile)}
+          style={{
+            height: 36, padding: "0 16px", border: "none", borderRadius: 8,
+            fontSize: 13, fontWeight: 700, color: "#fff",
+            background: scheduleAt ? "#f59e0b" : "#2563eb",
+            opacity: sendingSms || (!newSmsText.trim() && !smsFile) ? 0.5 : 1,
+            cursor: sendingSms || (!newSmsText.trim() && !smsFile) ? "not-allowed" : "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {sendingSms ? (scheduleAt ? "Scheduling..." : "Sending...") : scheduleAt ? "Schedule" : "Send now"}
+        </button>
+      </div>
     </div>
   </form>
 )}
+
+      {toast && (
+        <div style={{
+          position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 9999,
+          background: "#0f172a", color: "#fff", padding: "10px 16px", borderRadius: 10,
+          fontSize: 13, fontWeight: 600, boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+        }}>
+          {toast}
+        </div>
+      )}
+      {confirmCancel && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 10000, background: "rgba(15,23,42,0.45)",
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+          }}
+          onClick={() => setConfirmCancel(null)}
+        >
+          <div
+            style={{ background: "#fff", borderRadius: 16, padding: 20, width: "100%", maxWidth: 360, boxShadow: "0 20px 50px rgba(0,0,0,0.2)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a", marginBottom: 8 }}>Cancel scheduled message?</div>
+            <div style={{ fontSize: 13, color: "#64748b", marginBottom: 16, lineHeight: 1.4 }}>
+              This removes it from the queue in the app and in GHL. It will not be sent.
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" onClick={() => setConfirmCancel(null)}
+                style={{ height: 36, padding: "0 14px", borderRadius: 8, border: "1px solid #e2e8f0", background: "#fff", color: "#334155", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+                Keep it
+              </button>
+              <button type="button" onClick={confirmCancelScheduled}
+                style={{ height: 36, padding: "0 14px", borderRadius: 8, border: "none", background: "#dc2626", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+                Cancel message
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
         </div>
       )}
 
