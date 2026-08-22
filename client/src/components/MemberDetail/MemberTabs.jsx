@@ -53,6 +53,82 @@ export default function MemberTabs({
   onDeleteMember,
 }) {
   const [scheduleAt, setScheduleAt] = useState("");
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const smsTextRef = React.useRef(null);
+
+  const EMOJI_CATEGORIES = [
+    {
+      id: 'smileys',
+      label: '😊',
+      title: 'Smileys',
+      emojis: ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','☺️','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','😮‍💨','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🤧','🥵','🥶','🥴','😵','🤯','🤠','🥳','🥸','😎','🤓','🧐','😕','😟','🙁','☹️','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿','💀','☠️','💩','🤡','👹','👺','👻','👽','👾','🤖'],
+    },
+    {
+      id: 'gestures',
+      label: '👍',
+      title: 'Gestures',
+      emojis: ['👋','🤚','🖐️','✋','🖖','👌','🤌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👍','👎','✊','👊','🤛','🤜','👏','🙌','👐','🤲','🤝','🙏','✍️','💅','🤳','💪','🦾','🦵','🦶','👂','🦻','👃','🧠','👀','👁️','👅','👄'],
+    },
+    {
+      id: 'hearts',
+      label: '❤️',
+      title: 'Hearts',
+      emojis: ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','☮️','✝️','☪️','🕉️','☸️','✡️','🔯','🕎','☯️','☦️','🛐','⛎','♈','♉','♊','♋','♌','♍','♎','♏','♐','♑','♒','♓','🆔','⚛️'],
+    },
+    {
+      id: 'activity',
+      label: '🏋️',
+      title: 'Activity',
+      emojis: ['🏋️','🏋️‍♂️','🏋️‍♀️','🤸','🧘','🏃','🏃‍♂️','🏃‍♀️','🚶','🚴','🏊','⚽','🏀','🏈','⚾','🎾','🏐','🏉','🎱','🏓','🏸','🥅','🏒','🥊','🥋','🎯','⛳','🏆','🥇','🥈','🥉','🏅','🎖️','🏵️','🎗️','🎫','🎟️','🎪','🎭','🩰','🎨','🎬','🎤','🎧','🎼','🎹','🥁','🎷','🎺','🎸','🪕','🎻','🎲','♟️','🎮'],
+    },
+    {
+      id: 'food',
+      label: '🥗',
+      title: 'Food',
+      emojis: ['🍏','🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍈','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🍆','🥑','🥦','🥬','🥒','🌶️','🫑','🌽','🥕','🫒','🧄','🧅','🥔','🍠','🥐','🥯','🍞','🥖','🥨','🧀','🥚','🍳','🧈','🥞','🧇','🥓','🥩','🍗','🍖','🦴','🌭','🍔','🍟','🍕','🫓','🥪','🥙','🧆','🌮','🌯','🥗','🥘','🍝','🍜','🍲','🍛','🍣','🍱','🥟','🦪','🍤','🍙','🍚','🍘','🍥','🥠','🥮','🍢','🍡','🍧','🍨','🍦','🥧','🧁','🍰','🎂','🍮','🍭','🍬','🍫','🍿','🍩','🍪','🌰','🥜','🍯','🥛','🍼','☕','🍵','🧃','🥤','🧋','🍶','🍺','🍻','🥂','🍷','🥃','🍸','🍹','🧉','🧊','🥄','🍴','🍽️','🥣','🥡','🥢','🧂'],
+    },
+    {
+      id: 'nature',
+      label: '🌟',
+      title: 'Nature',
+      emojis: ['⭐','🌟','✨','⚡','🔥','💥','☄️','☀️','🌤️','⛅','🌈','☁️','🌧️','❄️','💧','💦','🌊','🌍','🌎','🌏','🌱','🌲','🌳','🌴','🌵','🌾','🌿','☘️','🍀','🍁','🍂','🍃','🌺','🌸','🌼','🌻','🌹','🥀','🌷','💐','🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🐣','🐥','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🪱','🐛','🦋','🐌','🐞','🐜','🪰','🐢','🐍','🦎','🐙','🦑','🦐','🦞','🦀','🐡','🐠','🐟','🐬','🐳','🐋','🦈'],
+    },
+    {
+      id: 'objects',
+      label: '📱',
+      title: 'Objects',
+      emojis: ['⌚','📱','💻','⌨️','🖥️','🖨️','🖱️','💾','💿','📀','📷','📸','📹','🎥','📞','☎️','📺','📻','⏱️','⏰','⏳','⌛','📡','🔋','🔌','💡','🔦','🕯️','🧯','🛢️','💸','💵','💴','💶','💷','💰','💳','💎','⚖️','🪜','🧰','🔧','🔨','⚒️','🛠️','⛏️','🔩','⚙️','🧱','⛓️','🧲','🔫','💣','🧨','🪓','🔪','🗡️','⚔️','🛡️','🚬','⚰️','🪦','⚱️','🏺','🔮','📿','🧿','💈','⚗️','🔭','🔬','🕳️','🩹','🩺','💊','💉','🩸','🧬','🦠','🧫','🧪','🌡️','🧹','🧺','🧻','🚽','🚰','🚿','🛁','🛀','🧼','🪥','🧽','🧴','🛎️','🔑','🗝️','🚪','🪑','🛋️','🛏️','🛌','🧸','🖼️','🛍️','🛒','🎁','🎈','🎏','🎀','🎊','🎉','🎎','🏮','🎐','🧧','✉️','📨','📧','💌','📥','📤','📦','🏷️','📪','📫','📬','📭','📮','📯','📜','📃','📄','📑','🧾','📊','📈','📉','🗒️','🗓️','📆','📅','🗑️','📇','🗃️','🗳️','🗄️','📋','📁','📂','🗂️','🗞️','📰','📓','📔','📒','📕','📗','📘','📙','📚','📖','🔖','🧷','🔗','📎','🖇️','📐','📏','🧮','📌','📍','✂️','🖊️','🖋️','✒️','🖌️','🖍️','📝','✏️','🔍','🔎','🔏','🔐','🔒','🔓'],
+    },
+    {
+      id: 'symbols',
+      label: '✅',
+      title: 'Symbols',
+      emojis: ['❤️','💯','💥','💫','💢','💤','💨','🕳️','💣','💬','👁️‍🗨️','🗨️','🗯️','💭','💤','✅','❌','❎','✔️','✖️','➕','➖','➗','➰','➿','❓','❔','❕','❗','〰️','©️','®️','™️','🔘','🔴','🟠','🟡','🟢','🔵','🟣','⚫','⚪','🟤','🔺','🔻','🔸','🔹','🔶','🔷','🔳','🔲','▪️','▫️','◾','◽','◼️','◻️','🟥','🟧','🟨','🟩','🟦','🟪','⬛','⬜','🟫','🔈','🔇','🔉','🔊','🔔','🔕','📣','📢','💬','💭','🗯️','♠️','♣️','♥️','♦️','🃏','🎴','🀄','🕐','🕑','🕒','🕓','🕔','🕕','🕖','🕗','🕘','🕙','🕚','🕛','🔼','🔽','▶️','⏸','⏹','⏺','⏭️','⏮️','⏩','⏪','🔀','🔁','🔂','⬆️','↗️','➡️','↘️','⬇️','↙️','⬅️','↖️','↕️','↔️','↩️','↪️','⤴️','⤵️','🔃','🔄'],
+    },
+  ];
+
+  const [emojiTab, setEmojiTab] = React.useState('smileys');
+
+  const insertEmoji = (emoji) => {
+    const el = smsTextRef.current;
+    const text = newSmsText || "";
+    if (el && typeof el.selectionStart === "number") {
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      const next = text.slice(0, start) + emoji + text.slice(end);
+      setNewSmsText(next);
+      requestAnimationFrame(() => {
+        try {
+          el.focus();
+          const pos = start + emoji.length;
+          el.setSelectionRange(pos, pos);
+        } catch (_) {}
+      });
+    } else {
+      setNewSmsText(text + emoji);
+    }
+  };
+
   const [toast, setToast] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(null);
 
@@ -458,6 +534,7 @@ export default function MemberTabs({
     style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "12px" }}
   >
     <textarea
+      ref={smsTextRef}
       placeholder="Type a message..."
       value={newSmsText}
       onChange={(e) => setNewSmsText(e.target.value)}
@@ -508,6 +585,50 @@ export default function MemberTabs({
       </div>
     )}
 
+    {showEmojiPicker && (
+      <div style={{
+        border: "1px solid #e2e8f0", borderRadius: 12, background: "#f8fafc", overflow: "hidden",
+      }}>
+        <div style={{
+          display: "flex", gap: 2, padding: "6px 6px 0", borderBottom: "1px solid #e2e8f0", overflowX: "auto",
+        }}>
+          {EMOJI_CATEGORIES.map((cat) => (
+            <button
+              key={cat.id}
+              type="button"
+              title={cat.title}
+              onClick={() => setEmojiTab(cat.id)}
+              style={{
+                border: "none",
+                background: emojiTab === cat.id ? "#e2e8f0" : "transparent",
+                fontSize: 18, cursor: "pointer", padding: "6px 8px",
+                borderRadius: "8px 8px 0 0", lineHeight: 1,
+              }}
+            >
+              {cat.label}
+            </button>
+          ))}
+        </div>
+        <div style={{
+          display: "flex", flexWrap: "wrap", gap: 2, padding: 8, maxHeight: 200, overflowY: "auto",
+        }}>
+          {(EMOJI_CATEGORIES.find((c) => c.id === emojiTab) || EMOJI_CATEGORIES[0]).emojis.map((em) => (
+            <button
+              key={em}
+              type="button"
+              onClick={() => insertEmoji(em)}
+              style={{
+                border: "none", background: "transparent", fontSize: 22,
+                cursor: "pointer", lineHeight: 1.2, padding: 4, borderRadius: 6,
+                width: 36, height: 36,
+              }}
+            >
+              {em}
+            </button>
+          ))}
+        </div>
+      </div>
+    )}
     {scheduleAt && (
       <div style={{
         fontSize: 12, fontWeight: 600, color: "#92400e", background: "#fffbeb",
@@ -524,6 +645,22 @@ export default function MemberTabs({
 
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          onClick={() => setShowEmojiPicker((v) => !v)}
+          title="Emoji"
+          style={{
+            border: "1px solid #cbd5e1",
+            background: showEmojiPicker ? "#eff6ff" : "#fff",
+            fontSize: 16,
+            lineHeight: 1,
+            cursor: "pointer",
+            padding: "6px 10px",
+            borderRadius: 6,
+          }}
+        >
+          😊
+        </button>
         <label style={{
           display: "inline-flex", alignItems: "center", gap: "6px", padding: "6px 12px",
           backgroundColor: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: "6px",
