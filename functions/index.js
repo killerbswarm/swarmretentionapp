@@ -136,18 +136,34 @@ exports.ghlCheckInWebhook = onRequest({ cors: true }, async (req, res) => {
     const memberDoc = await memberRef.get();
     const now = new Date();
 
-    let memberData;
+    // Tag-only enrollment: do not create members from check-ins.
+    // New members must come from ghlNewMemberWebhook (12 Week tag) or manual add.
+    if (!memberDoc.exists) {
+      console.log(
+        `Check-in ignored — not enrolled in 12-week: ${email || ghlId || firstName}`
+      );
+      return res.status(200).json({
+        success: false,
+        skipped: true,
+        reason: "not_enrolled",
+        message:
+          "Contact is not in the 12-week program. Add the 12 Week tag (or add them manually) before check-ins count.",
+      });
+    }
 
-    if (!memberDoc.exists || memberDoc.data().status === "pending") {
-      const existingData = memberDoc.exists ? memberDoc.data() : {};
-      
+    let memberData;
+    const existing = memberDoc.data() || {};
+
+    // Pending (tag enrolled) → first check-in starts the 12-week clock
+    if (existing.status === "pending") {
       memberData = {
+        ...existing,
         id: memberRef.id,
-        firstName: existingData.firstName || firstName,
-        lastName: existingData.lastName || lastName,
-        email: existingData.email || email || "",
-        phone: existingData.phone || phone || "",
-        dateAdded: existingData.dateAdded || now.toISOString(),
+        firstName: existing.firstName || firstName,
+        lastName: existing.lastName || lastName,
+        email: existing.email || email || "",
+        phone: existing.phone || phone || "",
+        dateAdded: existing.dateAdded || now.toISOString(),
         startDate: now.toISOString(),
         currentWeek: 1,
         weekOverride: null,
@@ -155,16 +171,21 @@ exports.ghlCheckInWebhook = onRequest({ cors: true }, async (req, res) => {
         weeklyCheckIns: { 1: 1 },
         lastCheckIn: now.toISOString(),
         riskLevel: "high",
-        inBodyScans: existingData.inBodyScans || { scan1: false, scan2: false, scan3: false }
+        inBodyScans: existing.inBodyScans || {
+          scan1: false,
+          scan2: false,
+          scan3: false,
+        },
       };
       await memberRef.set(memberData, { merge: true });
     } else {
-      const existing = memberDoc.data();
-      const currentWeek = calculateCurrentWeek(existing.startDate, existing.weekOverride);
-      
-      const currentWeeklyCounts = existing.weeklyCheckIns || {};
+      // Already active (or other status) → increment this week's visits
+      const currentWeek = calculateCurrentWeek(
+        existing.startDate,
+        existing.weekOverride
+      );
+      const currentWeeklyCounts = { ...(existing.weeklyCheckIns || {}) };
       const newCountForWeek = (currentWeeklyCounts[currentWeek] || 0) + 1;
-      
       currentWeeklyCounts[currentWeek] = newCountForWeek;
       const newRiskLevel = calculateRiskLevel(newCountForWeek);
 
@@ -173,30 +194,30 @@ exports.ghlCheckInWebhook = onRequest({ cors: true }, async (req, res) => {
         currentWeek,
         weeklyCheckIns: currentWeeklyCounts,
         lastCheckIn: now.toISOString(),
-        riskLevel: newRiskLevel
+        riskLevel: newRiskLevel,
       };
 
       await memberRef.update({
         currentWeek,
         weeklyCheckIns: currentWeeklyCounts,
         lastCheckIn: now.toISOString(),
-        riskLevel: newRiskLevel
+        riskLevel: newRiskLevel,
       });
     }
 
     await db.collection("check_ins").add({
       memberId: memberRef.id,
-      email: email || "",
+      email: email || existing.email || "",
       timestamp: now.toISOString(),
       weekNumber: memberData.currentWeek,
       source: "GHL Webhook",
-      rawPayload: payload
+      rawPayload: payload,
     });
 
     return res.status(200).json({
       success: true,
       message: `Check-in logged for ${firstName} ${lastName} (Week ${memberData.currentWeek})`,
-      member: memberData
+      member: memberData,
     });
 
   } catch (err) {
